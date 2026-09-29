@@ -45,6 +45,16 @@ burn-ndarray = { version = "0.21", default-features = false, features = [
 
 [profile.dev]
 opt-level = 1
+# No debug information. On macOS it is left in the object files rather than
+# the binary, so Cargo keeps every object of every test program it builds,
+# under new names at every rebuild, and never deletes the old ones: a few
+# weeks of test runs left 236,000 of them, 36 GB. Measured over a full build
+# of the tests and three one-line edits, full debug information came to 9 GB
+# and grew with each edit, line tables alone to 7.2 GB and grew by 2,800
+# objects an edit, and none came to 5.7 GB and stopped at 6.9 GB after the
+# first edit. A failing test still says where it failed; what is lost is
+# file and line in a RUST_BACKTRACE stack.
+debug = false
 
 [profile.dev.package."*"]
 opt-level = 3
