@@ -2,11 +2,17 @@
 #
 # Build ZX-Rustrum.app, and a .dmg holding it.
 #
-# The app is unsigned: macOS will refuse to open it on another machine until
-# it is signed with a Developer ID and notarised. To do that, set
-# MACOS_SIGN_IDENTITY to the identity name and this script will sign it; the
-# notarisation step (xcrun notarytool) needs an Apple account and is left to
-# whoever is doing the release.
+# Signing and notarisation are done when what they need is there, so a machine
+# without the certificate still builds an app it can run itself:
+#
+#   MACOS_SIGN_IDENTITY   a Developer ID Application identity in the keychain
+#   MACOS_NOTARY_KEY      path to an App Store Connect API key (.p8), with
+#   MACOS_NOTARY_KEY_ID   that key's id and
+#   MACOS_NOTARY_ISSUER   its issuer id
+#
+# MACOS_REQUIRE_SIGNED=true, which the release workflow sets, makes leaving
+# any of them out an error rather than a note: a release is never shipped
+# unsigned because a secret went missing.
 #
 # Usage: packaging/macos-app.sh [target-triple]
 #        packaging/macos-app.sh --dmg-name [target-triple]   (print it and stop)
@@ -36,6 +42,24 @@ dmg="target/packaging/ZX-Rustrum-$version-macos-$arch.dmg"
 if [ -n "$name_only" ]; then
     echo "$dmg"
     exit 0
+fi
+
+notarising=""
+if [ -n "${MACOS_NOTARY_KEY:-}" ] && [ -n "${MACOS_NOTARY_KEY_ID:-}" ] &&
+   [ -n "${MACOS_NOTARY_ISSUER:-}" ]; then
+    notarising=yes
+fi
+# Checked before the build rather than after it: a release that cannot be
+# signed should say so in seconds, not at the end of a ten-minute build.
+if [ "${MACOS_REQUIRE_SIGNED:-}" = true ]; then
+    if [ -z "${MACOS_SIGN_IDENTITY:-}" ]; then
+        echo "error: a release has to be signed, and MACOS_SIGN_IDENTITY is not set" >&2
+        exit 1
+    fi
+    if [ -z "$notarising" ]; then
+        echo "error: a release has to be notarised, and the notary key is not set" >&2
+        exit 1
+    fi
 fi
 
 cd "$root"
@@ -72,7 +96,7 @@ cat > "$app/Contents/Info.plist" <<PLIST
     <key>CFBundleName</key><string>ZX-Rustrum</string>
     <key>CFBundleDisplayName</key><string>ZX-Rustrum</string>
     <key>CFBundleExecutable</key><string>ZX-Rustrum</string>
-    <key>CFBundleIdentifier</key><string>uk.co.example.zx-rustrum</string>
+    <key>CFBundleIdentifier</key><string>com.robeesworld.zx-rustrum</string>
     <key>CFBundleIconFile</key><string>ZX-Rustrum</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>$version</string>
@@ -113,12 +137,53 @@ in ~/Library/Application Support/ZX Spectrum Emulator, which survives an
 upgrade of the app, and in whichever directory you last opened a ROM from.
 TXT
 
+sign() {
+    codesign --force --timestamp --sign "$MACOS_SIGN_IDENTITY" "$@"
+}
+
+notary() {
+    xcrun notarytool "$@" --key "$MACOS_NOTARY_KEY" \
+        --key-id "$MACOS_NOTARY_KEY_ID" --issuer "$MACOS_NOTARY_ISSUER"
+}
+
+# Send something to Apple and wait for the answer. The status is read from
+# what notarytool reports rather than left to its exit status, and Apple's
+# log is printed when it was not accepted, since that is the only place that
+# says why.
+notarise() {
+    local result id status
+    result="$(notary submit "$1" --wait --timeout 30m --output-format json || true)"
+    id="$(printf '%s' "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("id", ""))' 2>/dev/null || true)"
+    status="$(printf '%s' "$result" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("status", ""))' 2>/dev/null || true)"
+    echo "notarisation of $(basename "$1"): ${status:-no answer} ${id:+($id)}"
+    if [ "$status" != Accepted ]; then
+        printf '%s\n' "$result" >&2
+        if [ -n "$id" ]; then
+            notary log "$id" >&2 || true
+        fi
+        exit 1
+    fi
+}
+
 if [ -n "${MACOS_SIGN_IDENTITY:-}" ]; then
-    codesign --force --deep --options runtime --timestamp \
-        --sign "$MACOS_SIGN_IDENTITY" "$app"
+    # The hardened runtime is what notarisation asks for. Nothing in the app
+    # needs an exception to it: there is no microphone input, no code made at
+    # run time, nothing loaded by name. A single executable, so no --deep.
+    sign --options runtime "$app"
     codesign --verify --strict --verbose=2 "$app"
+    if [ -n "$notarising" ]; then
+        # Notarised, and the ticket stapled to the app, before it goes into
+        # the image: an app copied out of the image then opens without asking
+        # Apple, offline too.
+        zip="target/packaging/ZX-Rustrum.zip"
+        rm -f "$zip"
+        ditto -c -k --keepParent "$app" "$zip"
+        notarise "$zip"
+        rm -f "$zip"
+        xcrun stapler staple "$app"
+    fi
 else
-    echo "note: unsigned. Set MACOS_SIGN_IDENTITY to sign, then notarise." >&2
+    echo "note: unsigned. Set MACOS_SIGN_IDENTITY to sign." >&2
 fi
 
 rm -f "$dmg"
@@ -128,6 +193,17 @@ mkdir -p "$staging"
 cp -R "$app" "$staging/"
 ln -s /Applications "$staging/Applications"
 hdiutil create -volname "ZX-Rustrum" -srcfolder "$staging" -ov -format UDZO "$dmg" >/dev/null
+
+if [ -n "${MACOS_SIGN_IDENTITY:-}" ]; then
+    sign "$dmg"
+    if [ -n "$notarising" ]; then
+        notarise "$dmg"
+        xcrun stapler staple "$dmg"
+        # What Gatekeeper on another machine will make of them.
+        spctl --assess --type open --context context:primary-signature --verbose=2 "$dmg"
+        spctl --assess --type execute --verbose=2 "$app"
+    fi
+fi
 
 echo "built $app"
 echo "built $dmg"

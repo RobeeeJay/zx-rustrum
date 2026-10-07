@@ -189,6 +189,9 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       VERSION: ${{ needs.version.outputs.version }}
+      # Whether the signing secrets are there, as a word: a secret cannot be
+      # tested in a step's `if` directly, and this says no more than that.
+      HAVE_SIGNING: ${{ secrets.MACOS_CERTIFICATE != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -203,8 +206,47 @@ jobs:
 
       # The disk image is named for the version and the architecture by the
       # script itself, so the two macOS builds do not land on one file.
+      # The Developer ID certificate goes into a keychain of its own for the
+      # run, the notary key into a file, and both are taken away again below.
+      # Without the secrets nothing is put anywhere and the app is built
+      # unsigned — unless this is a release, which the packaging script
+      # refuses to build unsigned.
+      - name: Put the signing certificate and notary key in place
+        if: runner.os == 'macOS' && env.HAVE_SIGNING == 'true'
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_NOTARY_KEY_TEXT: ${{ secrets.MACOS_NOTARY_KEY }}
+        run: |
+          set -euo pipefail
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password="$(uuidgen)"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 21600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          printf '%s' "$MACOS_CERTIFICATE" | base64 --decode > "$RUNNER_TEMP/certificate.p12"
+          security import "$RUNNER_TEMP/certificate.p12" -k "$keychain" \
+            -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm -f "$RUNNER_TEMP/certificate.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" >/dev/null
+          security list-keychains -d user -s "$keychain" $(security list-keychains -d user | tr -d '"')
+          identity="$(security find-identity -v -p codesigning "$keychain" \
+            | sed -n 's/.*"\(Developer ID Application: .*\)"/\1/p' | head -1)"
+          if [ -z "$identity" ]; then
+            echo "MACOS_CERTIFICATE holds no Developer ID Application identity" >&2
+            exit 1
+          fi
+          echo "signing as $identity"
+          echo "MACOS_SIGN_IDENTITY=$identity" >> "$GITHUB_ENV"
+          printf '%s\n' "$MACOS_NOTARY_KEY_TEXT" > "$RUNNER_TEMP/notary.p8"
+          echo "MACOS_NOTARY_KEY=$RUNNER_TEMP/notary.p8" >> "$GITHUB_ENV"
+
       - name: Build the app bundle
         if: runner.os == 'macOS'
+        env:
+          MACOS_NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          MACOS_NOTARY_ISSUER: ${{ secrets.MACOS_NOTARY_ISSUER }}
+          MACOS_REQUIRE_SIGNED: ${{ needs.version.outputs.release }}
         # The image is moved up beside the archives. An artifact keeps the
         # paths of what went into it, and with the image left under
         # target/packaging it came back down under that path too — where the
@@ -213,6 +255,12 @@ jobs:
         run: |
           packaging/macos-app.sh ${{ matrix.target }}
           mv target/packaging/*.dmg .
+
+      - name: Take the signing certificate and notary key away
+        if: always() && runner.os == 'macOS' && env.HAVE_SIGNING == 'true'
+        run: |
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
+          rm -f "$RUNNER_TEMP/notary.p8"
 
       - name: Build
         if: runner.os != 'macOS'
@@ -291,7 +339,5 @@ jobs:
             yours next to the binary (or in `roms/`), or open one with
             File ▸ Load ROM…
 
-            The macOS build is not signed or notarised, so Gatekeeper will
-            refuse it until you clear the quarantine flag:
-
-                xattr -dr com.apple.quarantine "/Applications/ZX-Rustrum.app"
+            The macOS builds are signed with a Developer ID and notarised by
+            Apple, so they open like any other app downloaded from the web.

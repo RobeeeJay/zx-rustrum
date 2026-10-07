@@ -789,13 +789,24 @@ tools and what each is for.
 
 ## Building a release
 
-`packaging/macos-app.sh` builds `ZX Spectrum.app` and a `.dmg` around it,
+`packaging/macos-app.sh` builds `ZX-Rustrum.app` and a `.dmg` around it,
 generating the `.icns` from `packaging/icon.png` with `sips` and `iconutil`.
-The app is unsigned unless `MACOS_SIGN_IDENTITY` names a Developer ID, and
-notarisation is left to whoever cuts the release — without it macOS refuses to
-open the app on another machine until the quarantine flag is cleared:
+It signs both with the Developer ID named by `MACOS_SIGN_IDENTITY`, under the
+hardened runtime, and when an App Store Connect API key is given
+(`MACOS_NOTARY_KEY`, `MACOS_NOTARY_KEY_ID`, `MACOS_NOTARY_ISSUER`) notarises
+both and staples the ticket to each. Without them it builds an unsigned app,
+which is fine for the machine it was built on.
 
-    xattr -dr com.apple.quarantine "/Applications/ZX Spectrum.app"
+The release workflow does this from five repository secrets, and will not
+build a release without them:
+
+| Secret | What it is |
+| --- | --- |
+| `MACOS_CERTIFICATE` | The Developer ID Application certificate and its key, exported from Keychain Access as a `.p12`, then base64-encoded |
+| `MACOS_CERTIFICATE_PASSWORD` | The password the `.p12` was exported with |
+| `MACOS_NOTARY_KEY` | The text of an App Store Connect API key's `.p8` file |
+| `MACOS_NOTARY_KEY_ID` | That key's ID |
+| `MACOS_NOTARY_ISSUER` | The issuer ID shown above the list of keys |
 
 `.github/workflows/release.yml` runs the tests, `cargo fmt --check` and
 `cargo clippy -D warnings`, then packages a `.dmg` for each of the two macOS
