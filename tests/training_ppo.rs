@@ -451,9 +451,9 @@ fn a_player_chooses_again_when_the_clock_goes_back() {
 
 /// Going on from a kept network carries the optimiser's state with it. Three
 /// copies of the same kept network each take one update: two without the
-/// state come out identical — so any difference is not noise — and the one
-/// with it comes out different, because Adam's steps depend on what it had
-/// worked out before.
+/// state come out the same to within rounding — so a difference is not
+/// noise — and the one with it comes out different by far more, because
+/// Adam's steps depend on what it had worked out before.
 #[test]
 fn going_on_carries_the_optimisers_state() {
     let setup = Setup {
@@ -496,10 +496,25 @@ fn going_on_carries_the_optimisers_state() {
         also_without.probabilities(&seen),
         with.probabilities(&seen),
     );
-    assert_eq!(a, b, "two runs going on without it are identical");
-    assert_ne!(
-        a, c,
-        "and the one with the optimiser's state went its own way"
+    // Not bit for bit: threads add things up in an order that depends on the
+    // processor, and GitHub's x86 runners came out 1e-7 apart where this Mac
+    // matched exactly. The state's own effect measured 1e-2 to 2.5e-2, so
+    // there is room between the two for each bound to mean something.
+    let gap = |x: &[f32], y: &[f32]| {
+        x.iter()
+            .zip(y)
+            .map(|(p, q)| (p - q).abs())
+            .fold(0f32, f32::max)
+    };
+    let (noise, effect) = (gap(&a, &b), gap(&a, &c));
+    assert!(
+        noise < 1e-5,
+        "two runs going on without it agree to within rounding: {noise:e} apart, {a:?} and {b:?}"
+    );
+    assert!(
+        effect > 1e-3,
+        "and the one with the optimiser's state went its own way: only {effect:e} apart, \
+         against {noise:e} between the two without"
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
