@@ -12,9 +12,8 @@ on:
         type: boolean
         default: false
 
-# A pull request that has been pushed to again is not worth its minutes: this
-# is a private repository, so every minute is billed, and macOS is billed at
-# ten times the rate of Linux.
+# A pull request that has been pushed to again is not worth finishing: only
+# its newest commit is going to be merged.
 #
 # A run on main is never cancelled, though it shares the group. Runs here are
 # created minutes after the push that asks for them — six, sixteen and
@@ -38,14 +37,11 @@ jobs:
   # released before, so cutting a release is bumping that version: the tag and
   # the release are made from the commit that changed it.
   #
-  # What it costs decides the rest. Minutes on a private repository are billed
-  # at one a minute on Linux, two on Windows and ten on macOS, and a full run
-  # of this workflow is seven jobs of which three are macOS — enough to spend
-  # a month's allowance on a handful of pushes. So an ordinary push is tested
-  # on Linux and nothing else, and the other two platforms and the packaging
-  # run when there is something to release: a version bump, a tag, or a
-  # workflow_dispatch asking for it. A push that only touches prose is not
-  # built at all.
+  # A full run is seven jobs, three of them on macOS, and took 29 minutes for
+  # 1.2.0, so an ordinary push is tested on Linux and nothing else, and the
+  # other two platforms and the packaging run when there is something to
+  # release: a version bump, a tag, or a workflow_dispatch asking for it. A
+  # push that only touches prose is not built at all.
   version:
     runs-on: ubuntu-latest
     outputs:
@@ -299,9 +295,8 @@ jobs:
             ZX-Rustrum-*.dmg
           if-no-files-found: error
           # These are a step on the way to the release, which keeps its own
-          # copy: a fortnight is long enough to fetch one by hand and short
-          # enough that a private repository's half-gigabyte of storage is not
-          # spent on ninety days of them, at forty-odd megabytes a run.
+          # copy: a fortnight is long enough to fetch one by hand, and there
+          # is no point keeping forty-odd megabytes a run for ninety days.
           retention-days: 14
 
   release:
