@@ -43,6 +43,12 @@ cd zx-rustrum-<version>-linux-x86_64
 It needs ALSA for sound (`libasound2`, which most desktops already have) and
 `xdg-desktop-portal` for the file dialogs.
 
+**Optional, on any of them:** recording a video of the screen needs
+[`ffmpeg`](https://ffmpeg.org) on your `PATH` (`brew install ffmpeg` on a Mac,
+or your distribution's `ffmpeg` package). Nothing else uses it, so skip it
+unless you want videos. Without it the video button just tells you why it
+can't record.
+
 ### ROMs
 
 No ROMs are included, because they are still somebody's copyright, so you'll
