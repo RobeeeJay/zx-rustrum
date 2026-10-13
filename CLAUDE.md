@@ -94,6 +94,9 @@ set of decisions rather than a manual:
   against what, and what is still open.
 - [`docs/tape-loading.md`](docs/tape-loading.md) — the tape formats and their
   traps, the ROM loader's contract, and the three loading speeds.
+- [`docs/build.md`](docs/build.md) — building from source, the tests, how a
+  release is cut and signed, the source layout, and why the build is the
+  shape it is.
 - [`docs/training.md`](docs/training.md) — teaching a network to play: what it
   sees, the judge, the set-up file, what the settings do and what was
   measured.
