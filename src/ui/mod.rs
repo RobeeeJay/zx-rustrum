@@ -234,17 +234,6 @@ pub const HELD_WHILE_RECORDING: &str =
      and changing it part way would shear the picture from there on. Stop the \
      recording to change it. Composite can be switched either way.";
 
-/// Whether the clock is offered in the window.
-///
-/// Not at the moment. What it does is speed the whole machine, ULA included,
-/// so the interrupt comes twice as often at twice the clock and a game reading
-/// the frame counter runs fast rather than smoothly. An accelerator that
-/// leaves the video at 50Hz is a different thing — the CPU's clock and the
-/// ULA's stop being one clock, which is a change to how time is kept here
-/// rather than a multiplier on it. The machinery stays, and the switch comes
-/// back when it is that.
-pub const SHOW_CLOCK: bool = true;
-
 /// The clock dropdown: the machine's own speed, and multiples of it.
 ///
 /// In MHz rather than in multiples, since that is what a clock is measured in,
@@ -3683,29 +3672,25 @@ impl App {
             theme::divider(ui);
             theme::group_label(ui, "Machine");
             self.machine_dropdown(ui);
-            if SHOW_CLOCK {
-                theme::group_label(ui, "CPU");
-                let base = self.machine_cpu_hz();
-                let before = self.clock_mult;
-                let held = self.turbo_held_because();
-                clock_dropdown(&mut self.clock_mult, base, ui);
-                self.speed_control(ui);
-                if let Some(why) = held {
-                    ui.label(
-                        egui::RichText::new(format!("at {:.2}MHz — {why}", base / 1e6))
-                            .small()
-                            .color(theme::DIM),
-                    );
-                }
-                if self.clock_mult != before {
-                    // The mixer counts in T-states, so it has to be told: a
-                    // beeper note would otherwise come out at the pitch the
-                    // machine was built for rather than the one it is running
-                    // at.
-                    self.apply_clock();
-                }
-            } else {
-                self.speed_control(ui);
+            theme::group_label(ui, "CPU");
+            let base = self.machine_cpu_hz();
+            let before = self.clock_mult;
+            let held = self.turbo_held_because();
+            clock_dropdown(&mut self.clock_mult, base, ui);
+            self.speed_control(ui);
+            if let Some(why) = held {
+                ui.label(
+                    egui::RichText::new(format!("at {:.2}MHz — {why}", base / 1e6))
+                        .small()
+                        .color(theme::DIM),
+                );
+            }
+            if self.clock_mult != before {
+                // The mixer counts in T-states, so it has to be told: a
+                // beeper note would otherwise come out at the pitch the
+                // machine was built for rather than the one it is running
+                // at.
+                self.apply_clock();
             }
             self.late_timing(ui);
             if ui.button("Reset").clicked() {
