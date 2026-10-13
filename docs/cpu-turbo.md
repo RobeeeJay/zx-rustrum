@@ -1,12 +1,21 @@
 # A faster CPU against the same ULA
 
-A plan, not a change. Nothing in this file is implemented yet.
+**Done, and on main.** This started as a plan, and the plan is kept below as
+it was decided, because the reasoning is the useful part. Where what was built
+differs from what was planned, it says so in place. What got built is the
+**CPU** dropdown on the main window: up to 8× (28MHz on a 48K), held at 1×
+while a tape or a recording is playing, with a line beside it saying which.
+The two clocks themselves are written up in [`timing.md`](timing.md).
 
-The Clock dropdown that exists (hidden, behind `ui::SHOW_CLOCK`) multiplies the
-whole machine: at 7MHz the frame is still 69,888 T-states and those T-states go
-by twice as fast, so the interrupt comes a hundred times a second and a game
-reading the frame counter runs fast rather than smoothly. That is a Spectrum
-with its crystal changed. What is wanted instead is an accelerator: the CPU
+*Earlier versions of this file still opened with "A plan, not a change.
+Nothing in this file is implemented yet" after all four stages below had been
+merged. That was out of date from 19 August.*
+
+Before this, the Clock dropdown (hidden then, behind `ui::SHOW_CLOCK`)
+multiplied the whole machine: at 7MHz the frame was still 69,888 T-states and
+those T-states went by twice as fast, so the interrupt came a hundred times a
+second and a game reading the frame counter ran fast rather than smoothly.
+That is a Spectrum with its crystal changed. What is wanted instead is an accelerator: the CPU
 gets more cycles inside a frame of the ULA's own time, the picture is still
 drawn fifty times a second, and a game's timing loops finish early rather than
 its whole world speeding up.
@@ -93,6 +102,10 @@ Everything is in `src/machine.rs` unless it says otherwise.
    dropdown's label; `apply_clock` stops touching the mixer, since the mixer
    counts ULA T-states and those still pass at 3.5MHz.
 8. **`ui::SHOW_CLOCK`** comes out, and the dropdown says what it now is.
+   *As built:* the dropdown says CPU, but the constant didn't come out. It's
+   still there, set to `true`, and the comment above it still describes the
+   old whole-machine multiplier as the reason it's hidden. That comment is
+   wrong now and wants rewriting or removing along with the constant.
 
 ## Three places it has to be held at 1×
 
@@ -112,6 +125,11 @@ Everything is in `src/machine.rs` unless it says otherwise.
   a T-state; that still works, but "what the machine had done by this point in
   the frame" means something different when the CPU is running four times as
   fast, so the drawing wants a word saying which clock the cursor is in.
+
+*As built:* the first two are held (`App::turbo_held_because`, "a recording
+is playing" and "a tape is loading"). The third is not. The beam drawings run
+at whatever the CPU is set to, and the word on the drawing hasn't been written.
+It's under **Still open**.
 
 ## What it does to the parts that were not touched
 
@@ -181,7 +199,7 @@ New tests, once it multiplies:
 
 ## Staging
 
-All four done, on `cpu-turbo`:
+All four done, on `cpu-turbo`, and since merged into main:
 
 1. **`cpu_cycles` and `turbo`, fixed at 1** (`7e6415e`). Nothing moved, which
    the timing tests, HALT2INT and the reference numbers decided.
