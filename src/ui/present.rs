@@ -1,6 +1,7 @@
 //! How the main window shows the picture: with its controls, filling the
 //! window without them, or filling the display with the window system's own
-//! full screen. Command+F or F11 goes round the three.
+//! full screen. Command+F or F11 goes round the three, and Esc leaves full
+//! screen for the normal window.
 //!
 //! Ctrl is the machine's SYMBOL SHIFT, so Ctrl+F is somebody typing at a
 //! Spectrum and cannot be the chord on Windows and Linux. F11 is free on all
@@ -98,6 +99,16 @@ impl App {
         });
         self.chord_key_held = chord || (self.chord_key_held && f_down);
         if chord || f11 {
+            self.next_presentation(ctx);
+        }
+        // Esc leaves full screen, unless it is already spoken for: giving up a
+        // Find, read later in the frame, or giving back a captured mouse, which
+        // has had first go at it by now. Only the display's full screen: the
+        // filled window is a window, and a game may be being played in it.
+        if self.presentation == Presentation::FullScreen
+            && !self.gfx_picking
+            && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Escape))
+        {
             self.next_presentation(ctx);
         }
     }

@@ -574,6 +574,7 @@ that decided whether the tests' tiny game was learnt in 25 updates or 140 —
 **The main window has three presentations, and `scale` is not what is drawn.**
 Command+F or F11 goes from the normal window, to the picture filling it with
 no controls, to the window system's full screen, and back (`src/ui/present.rs`).
+Esc leaves full screen too, after a captured mouse and a Find have had it.
 `scale` stays the zoom somebody chose, so coming back comes back to it, and
 anything turning points into the machine's pixels goes through `drawn_scale()`.
 Ctrl is SYMBOL SHIFT, which is why it is not Ctrl+F elsewhere. `key_down` goes

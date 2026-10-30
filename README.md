@@ -115,8 +115,10 @@ quietly swallowed.
 SHIFT on Windows and Linux), goes round three ways of showing the picture. The
 first press takes every control away and fits the picture to the window. The
 second fills the display using the system's own full screen. The third brings
-the normal window back, at the zoom you left it. With the controls gone the key
-is the way back, so it's worth remembering. It's refused while a video is
+the normal window back, at the zoom you left it. **Esc** leaves full screen for
+the normal window as well, once it has given back a captured mouse or given up
+a Find if either was going on. It doesn't leave the filled window, so with the
+controls gone there the key is the way back, and it's worth remembering. It's refused while a video is
 recording, because the picture's size can't change during one.
 
 The fit fills the space, so it's rarely a whole number of times the machine's

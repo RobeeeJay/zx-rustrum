@@ -104,6 +104,99 @@ fn command_f_goes_round_the_three_and_back_to_the_controls() {
     assert_eq!(h.state().scale, 2.0, "at the zoom they were left at");
 }
 
+fn escape(h: &mut Harness<'_, App>) {
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+}
+
+fn to_full_screen(h: &mut Harness<'_, App>) {
+    for _ in 0..2 {
+        command_f(h);
+        let_go(h);
+    }
+    h.run_steps(2);
+    assert_eq!(h.state().presentation, Presentation::FullScreen);
+}
+
+/// Esc leaves full screen for the normal window, controls and all, and tells
+/// the window system so.
+#[test]
+fn escape_leaves_full_screen_for_the_normal_window() {
+    let mut h = harness_for(test_app());
+    h.run_steps(2);
+    to_full_screen(&mut h);
+
+    h.event(egui::Event::Key {
+        key: Key::Escape,
+        pressed: true,
+        modifiers: Modifiers::NONE,
+        repeat: false,
+        physical_key: None,
+    });
+    h.step();
+    assert_eq!(h.state().presentation, Presentation::Normal);
+    assert_eq!(asked_for(&h), [false], "the window system is told");
+    h.key_up(Key::Escape);
+    h.run_steps(2);
+    assert!(h.query_by_label("Reset").is_some(), "the controls are back");
+}
+
+/// Only full screen. In the normal window and the filled one Esc does nothing
+/// to the presentation.
+#[test]
+fn escape_is_only_for_full_screen() {
+    let mut h = harness_for(test_app());
+    h.run_steps(2);
+    escape(&mut h);
+    assert_eq!(h.state().presentation, Presentation::Normal);
+    command_f(&mut h);
+    let_go(&mut h);
+    escape(&mut h);
+    assert_eq!(h.state().presentation, Presentation::Filled);
+}
+
+/// A captured mouse has first call on Esc, or there would be no way to get the
+/// pointer back without losing full screen as well. The next Esc leaves.
+#[test]
+fn escape_gives_back_a_captured_mouse_first() {
+    let mut app = test_app();
+    app.fit(zx_rustrum::hardware::Peripheral::KempstonMouse, true);
+    let mut h = harness_for(app);
+    h.run_steps(2);
+    to_full_screen(&mut h);
+    h.state_mut().mouse_captured = true;
+
+    escape(&mut h);
+    assert!(!h.state().mouse_captured, "the pointer is given back");
+    assert_eq!(
+        h.state().presentation,
+        Presentation::FullScreen,
+        "still full screen"
+    );
+    escape(&mut h);
+    assert_eq!(h.state().presentation, Presentation::Normal);
+}
+
+/// So does a Find waiting for a block to be clicked: Esc gives that up.
+#[test]
+fn escape_gives_up_a_find_first() {
+    let mut h = harness_for(test_app());
+    h.run_steps(2);
+    to_full_screen(&mut h);
+    h.state_mut().start_graphics_find();
+    h.run_steps(2);
+
+    escape(&mut h);
+    assert!(!h.state().gfx_picking, "the Find is given up");
+    assert_eq!(
+        h.state().presentation,
+        Presentation::FullScreen,
+        "still full screen"
+    );
+    escape(&mut h);
+    assert_eq!(h.state().presentation, Presentation::Normal);
+}
+
 /// F11 does the same, for the machines where Ctrl is SYMBOL SHIFT and Command
 /// is not there to press; the button does it for a pointer.
 #[test]
