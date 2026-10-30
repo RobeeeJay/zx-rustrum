@@ -13,6 +13,7 @@ pub mod inputwin;
 pub mod keyboard;
 pub mod microdrive;
 pub mod microdrivewin;
+pub mod present;
 pub mod printerwin;
 pub mod profiler;
 pub mod ram_map;
@@ -477,6 +478,11 @@ pub struct App {
     pub show_printer: bool,
     printer_view: printerwin::View,
     /// A network learning to play, and the game it is learning.
+    /// How the main window is showing the picture, and what goes with it.
+    pub presentation: present::Presentation,
+    fill_scale: f32,
+    os_fullscreen_seen: bool,
+    chord_key_held: bool,
     pub show_training: bool,
     pub training: trainwin::Training,
     /// Ten quicksaves, kept in memory for as long as the emulator is open, and
@@ -676,6 +682,10 @@ impl App {
             show_input: false,
             show_printer: false,
             printer_view: printerwin::View::default(),
+            presentation: present::Presentation::default(),
+            fill_scale: 1.0,
+            os_fullscreen_seen: false,
+            chord_key_held: false,
             show_training: false,
             training: trainwin::Training::default(),
             quick: Default::default(),
@@ -1182,7 +1192,7 @@ impl App {
         // The raw motion's units are the platform's — points on macOS — and
         // are taken as points.
         let points = motion.unwrap_or(delta);
-        let moved = self.mouse_rest + points / self.scale.max(0.01);
+        let moved = self.mouse_rest + points / self.drawn_scale().max(0.01);
         let whole = egui::vec2(moved.x.trunc(), moved.y.trunc());
         self.mouse_rest = moved - whole;
         let (dx, dy) = (whole.x as i32, whole.y as i32);
@@ -1270,7 +1280,7 @@ impl App {
             return;
         }
         let view = self.view();
-        let scale = self.scale;
+        let scale = self.drawn_scale();
         let cell_at = |p: egui::Pos2| -> Option<(u16, u16)> {
             let x = ((p.x - picture.left()) / scale) as i32 - view.border_x as i32;
             let y = ((p.y - picture.top()) / scale) as i32 - view.border_top as i32;
@@ -3455,12 +3465,12 @@ impl App {
             // needs two rows of screen for every row of picture, and asking
             // for them at a zoom that has not got two is asking for a moiré:
             // some gaps drawn, some not, in a pattern of their own.
-            scanlines: if self.crt && self.scale >= 2.0 {
+            scanlines: if self.crt && self.drawn_scale() >= 2.0 {
                 plain.scanlines
             } else {
                 0.0
             },
-            line_gaps: self.crt && self.scale >= 2.0,
+            line_gaps: self.crt && self.drawn_scale() >= 2.0,
         }
     }
 
@@ -4133,6 +4143,19 @@ impl App {
             .response
             .on_disabled_hover_text(HELD_WHILE_RECORDING);
 
+            let response = ui
+                .add_enabled(!held, egui::Button::new("Full screen"))
+                .on_hover_text(
+                    "Fill the window with the picture and nothing else, then the whole \
+                     display, then back to this. Command+F or F11 goes round them, and is \
+                     the way back, since this button goes too.",
+                )
+                .on_disabled_hover_text(HELD_WHILE_RECORDING);
+            if response.clicked() {
+                let ctx = ui.ctx().clone();
+                self.next_presentation(&ctx);
+            }
+
             theme::divider(ui);
             theme::group_label(ui, "Video");
 
@@ -4501,11 +4524,15 @@ impl App {
         }
         let ctx = ctx.clone();
         let dt = ctx.input(|i| i.stable_dt);
+        self.read_presentation_keys(&ctx);
+        self.follow_the_window(&ctx);
         self.read_keyboard(&ctx);
         self.read_quick_keys(&ctx);
         self.advance(dt);
         self.sync_title(&ctx);
-        self.remember_window("main", &ctx);
+        if self.window_size_is_its_own(&ctx) {
+            self.remember_window("main", &ctx);
+        }
         match &mut self.zx81 {
             Some(zx) => zx.bus.tape_tick(),
             None => self.spec.bus.tape_tick(),
@@ -4542,30 +4569,41 @@ impl App {
 
     /// The main window itself: its toolbars, the picture and the status line.
     fn draw_main(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::top("menu").show(ui, |ui| {
-            self.menu(ui);
-            self.machine_row(ui);
-            self.video_row(ui);
-        });
+        let controls = self.presentation.shows_controls();
+        if controls {
+            egui::Panel::top("menu").show(ui, |ui| {
+                self.menu(ui);
+                self.machine_row(ui);
+                self.video_row(ui);
+            });
+        }
         let ctx = ui.ctx().clone();
         self.disk_prompt(&ctx);
         self.cartridge_prompt(&ctx);
-        egui::Panel::bottom("status").show(ui, |ui| {
-            self.controls_row(ui);
-            let status = self.status.clone();
-            ui.horizontal(|ui| {
-                if self.status_is_error {
-                    ui.colored_label(theme::RED, status);
-                } else {
-                    ui.colored_label(theme::DIM, status);
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    theme::rainbow(ui);
+        if controls {
+            egui::Panel::bottom("status").show(ui, |ui| {
+                self.controls_row(ui);
+                let status = self.status.clone();
+                ui.horizontal(|ui| {
+                    if self.status_is_error {
+                        ui.colored_label(theme::RED, status);
+                    } else {
+                        ui.colored_label(theme::DIM, status);
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        theme::rainbow(ui);
+                    });
                 });
             });
-        });
+        }
         let mut beam = None;
-        egui::CentralPanel::default().show(ui, |ui| {
+        let panel = egui::CentralPanel::default();
+        let panel = if controls {
+            panel
+        } else {
+            panel.frame(egui::Frame::NONE.fill(egui::Color32::BLACK))
+        };
+        panel.show(ui, |ui| {
             if let Some(tex) = &self.screen_tex {
                 let (w, h) = match &self.zx81 {
                     Some(_) if self.overscan => (zx81::View::OVERSCAN.w, zx81::View::OVERSCAN.h),
@@ -4575,30 +4613,34 @@ impl App {
                         (v.width(), v.height())
                     }
                 };
-                let size = egui::vec2(w as f32 * self.scale, h as f32 * self.scale);
                 // Take the whole panel and put the picture in the middle of it,
                 // so the space around the display is equal on all four sides.
                 let (area, response) =
                     ui.allocate_exact_size(ui.available_size(), egui::Sense::click());
+                self.fill_scale = present::fit_scale(area.size(), w, h);
+                let scale = self.drawn_scale();
+                let size = egui::vec2(w as f32 * scale, h as f32 * scale);
                 let painter = ui.painter_at(area);
-                // The picture sits in a bevelled surround rather than on bare
-                // black, as a set does in its case.
-                painter.rect_filled(area, 0.0, theme::CASE_DARK);
                 let picture = screen::centred(area, size);
-                let bezel = picture.expand(10.0);
-                painter.rect_filled(bezel, 6.0, egui::Color32::from_rgb(0x1a, 0x17, 0x13));
-                painter.rect_stroke(
-                    bezel,
-                    6.0,
-                    egui::Stroke::new(1.0, egui::Color32::BLACK),
-                    egui::StrokeKind::Inside,
-                );
-                painter.rect_stroke(
-                    picture.expand(1.0),
-                    2.0,
-                    egui::Stroke::new(1.0, egui::Color32::from_rgb(0x3a, 0x35, 0x2d)),
-                    egui::StrokeKind::Outside,
-                );
+                if controls {
+                    // The picture sits in a bevelled surround rather than on
+                    // bare black, as a set does in its case.
+                    painter.rect_filled(area, 0.0, theme::CASE_DARK);
+                    let bezel = picture.expand(10.0);
+                    painter.rect_filled(bezel, 6.0, egui::Color32::from_rgb(0x1a, 0x17, 0x13));
+                    painter.rect_stroke(
+                        bezel,
+                        6.0,
+                        egui::Stroke::new(1.0, egui::Color32::BLACK),
+                        egui::StrokeKind::Inside,
+                    );
+                    painter.rect_stroke(
+                        picture.expand(1.0),
+                        2.0,
+                        egui::Stroke::new(1.0, egui::Color32::from_rgb(0x3a, 0x35, 0x2d)),
+                        egui::StrokeKind::Outside,
+                    );
+                }
                 if self.crt {
                     // Onto the glass, which is part of a sphere: the corners
                     // sit further out than the edges.
@@ -4636,8 +4678,8 @@ impl App {
                 if response.clicked() && !mouse && !picking {
                     if let Some(at) = response.interact_pointer_pos() {
                         if picture.contains(at) {
-                            let px = ((at.x - picture.left()) / self.scale) as usize;
-                            let py = ((at.y - picture.top()) / self.scale) as usize;
+                            let px = ((at.x - picture.left()) / scale) as usize;
+                            let py = ((at.y - picture.top()) / scale) as usize;
                             self.show_pixel_in_memory(px, py);
                         }
                     }
@@ -4651,7 +4693,7 @@ impl App {
                 // the frame looking broken. The ZX81 has no ULA drawing a
                 // picture — the CPU does it — so there is no beam to show.
                 if self.crawling() && self.zx81.is_none() {
-                    draw_beam(&painter, &self.spec.bus, self.view(), picture, self.scale);
+                    draw_beam(&painter, &self.spec.bus, self.view(), picture, scale);
                 }
 
                 // Where is the beam? Wherever the cursor is over the picture.
@@ -4663,8 +4705,8 @@ impl App {
                             .hover_pos()
                             .filter(|p| picture.contains(*p))
                             .map(|p| {
-                                let px = ((p.x - picture.left()) / self.scale) as usize;
-                                let py = ((p.y - picture.top()) / self.scale) as usize;
+                                let px = ((p.x - picture.left()) / scale) as usize;
+                                let py = ((p.y - picture.top()) / scale) as usize;
                                 beam_at(&self.spec.bus, spectrum_view, px, py)
                             })
                     })
@@ -5253,7 +5295,7 @@ impl App {
         // the main window's own go to a text field in it rather than to the
         // machine while one is being typed into, as the other windows' do.
         let window = self.window_keys.clone();
-        let typing = ctx.text_edit_focused();
+        let typing = ctx.text_edit_focused() || self.host_has_the_keys(ctx);
         let down = |key| {
             (!typing && ctx.input(|i: &egui::InputState| i.key_down(key)))
                 || window.keys.contains(&key)

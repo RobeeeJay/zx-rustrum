@@ -111,6 +111,19 @@ title always names the machine in use. When something fails, like a missing
 ROM or an unreadable tape, it shows in red in the status bar instead of being
 quietly swallowed.
 
+**Full screen**, or **Command+F** (**F11** on any machine, since Ctrl is SYMBOL
+SHIFT on Windows and Linux), goes round three ways of showing the picture. The
+first press takes every control away and fits the picture to the window. The
+second fills the display using the system's own full screen. The third brings
+the normal window back, at the zoom you left it. With the controls gone the key
+is the way back, so it's worth remembering. It's refused while a video is
+recording, because the picture's size can't change during one.
+
+The fit fills the space, so it's rarely a whole number of times the machine's
+pixels, and at most sizes some rows of pixels come out a screen pixel thicker
+than others. If that bothers you more than the border does, the Zoom dropdown
+is still there in the normal window.
+
 ## What It Does
 
 **A Z80 timed by the bus cycle.** Timing isn't counted per instruction. The

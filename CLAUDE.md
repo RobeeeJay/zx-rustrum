@@ -571,6 +571,18 @@ set of controls is neither playing nor watching. The discount is the setting
 that decided whether the tests' tiny game was learnt in 25 updates or 140 —
 [`docs/training.md`](docs/training.md) has why.
 
+**The main window has three presentations, and `scale` is not what is drawn.**
+Command+F or F11 goes from the normal window, to the picture filling it with
+no controls, to the window system's full screen, and back (`src/ui/present.rs`).
+`scale` stays the zoom somebody chose, so coming back comes back to it, and
+anything turning points into the machine's pixels goes through `drawn_scale()`.
+Ctrl is SYMBOL SHIFT, which is why it is not Ctrl+F elsewhere. `key_down` goes
+on saying F after `consume_key` has taken the press, so a Command chord has to
+be kept from the machine separately, and the F for as long as it stays down
+after Command is let go. The window reports full screen late in both
+directions: it counts as left only once it has been seen to arrive, and its
+size is not remembered while either side says it is full screen.
+
 **A joystick is a choice, not a fact.** The machine has no joystick port, so
 every interface solved it differently: Kempston on a port, Sinclair and Cursor
 wired to five keys each — which is why they work with games that know nothing
