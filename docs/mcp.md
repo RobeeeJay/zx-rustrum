@@ -23,11 +23,20 @@ can quote back is worth more than a structure it has to re-serialise.
 **Getting a machine going.** `machine_info`, `set_machine`, `reset`,
 `load_tape`, `load_snapshot`, `load_recording`, `play_recording`.
 
-`load_tape` types `LOAD ""` and runs the tape to its end with the ROM loader
+`load_tape` starts the tape and runs it to its end with the ROM loader
 handed over, so a four-minute tape loads in a second or two of real time; pass
 `autoload: false` to put it in the deck without starting it. `load_snapshot` is
 quicker still and starts in the middle of a game, which is usually where the
 interesting code is.
+
+It types the same `LOAD ""` on every model, and the menu on a 128K, +2A or +3
+ignores the letters and takes the `ENTER` as its first line, the tape loader. If the
+machine never calls the ROM's loader at `$0556`, the tool fails rather than
+pretending. That only says it started reading, though, and a game can still fail
+after that. Jetpac does on a 128K: from the menu, its stub has its `LDIR` at `$5B89`,
+on a byte the ROM decrements every other frame, so it becomes a `CALL` and resets the
+machine. From 48 BASIC, with paging locked, it runs. So when PC ends up in the ROM
+the tool says so, and it's worth looking at the screen.
 
 **The map, before disassembling.** `memory_activity`, `tape_blocks`, `loader`.
 

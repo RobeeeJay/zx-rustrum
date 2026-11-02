@@ -962,6 +962,119 @@ fn the_paging_can_be_read_and_changed_on_a_128k() {
     assert_eq!(server.session.spec.bus.page_reg & 7, 3);
 }
 
+/// A one-line BASIC program on tape, autostarting at line 10:
+/// 10 POKE 40000,42
+fn poking_tape() -> Vec<u8> {
+    fn number(digits: &[u8], value: u16, out: &mut Vec<u8>) {
+        out.extend_from_slice(digits);
+        out.extend_from_slice(&[0x0E, 0, 0, value as u8, (value >> 8) as u8, 0]);
+    }
+    let mut line = vec![0xF4]; // POKE
+    number(b"40000", 40000, &mut line);
+    line.push(b',');
+    number(b"42", 42, &mut line);
+    line.push(0x0D);
+    let mut program = vec![0, 10, line.len() as u8, 0];
+    program.extend_from_slice(&line);
+
+    let mut header = vec![0u8]; // a program
+    header.extend_from_slice(b"POKER     ");
+    let length = program.len() as u16;
+    header.extend_from_slice(&length.to_le_bytes());
+    header.extend_from_slice(&10u16.to_le_bytes()); // autostart
+    header.extend_from_slice(&length.to_le_bytes()); // no variables
+    let mut tap = Vec::new();
+    for (flag, body) in [(0x00u8, &header), (0xFF, &program)] {
+        let checksum = body.iter().fold(flag, |sum, b| sum ^ b);
+        let size = body.len() as u16 + 2;
+        tap.extend_from_slice(&size.to_le_bytes());
+        tap.push(flag);
+        tap.extend_from_slice(body);
+        tap.push(checksum);
+    }
+    tap
+}
+
+// A program of our own that runs and leaves a mark, since a real game may not
+// survive every machine: Jetpac's stub has its LDIR at $5B89, on a byte the 128K's
+// ROM decrements, so on a 128K it loads and then crashes. That looked like autoload
+// failing, and the first "fix" here changed the keys without changing anything.
+#[test]
+fn autoload_runs_a_tape_on_every_model_of_spectrum() {
+    let path = std::env::temp_dir().join(format!("zxrs-poker-{}.tap", std::process::id()));
+    std::fs::write(&path, poking_tape()).unwrap();
+    for (model, rom) in [
+        ("48k", "roms/48.rom"),
+        ("128k", "roms/128.rom"),
+        ("+2a", "roms/plus3.rom"),
+        ("+3", "roms/plus3.rom"),
+    ] {
+        if std::fs::read(rom).is_err() {
+            eprintln!("need {rom}; skipping {model}");
+            continue;
+        }
+        let mut server = Server::new();
+        call(
+            &mut server,
+            "set_machine",
+            Json::obj([("model", Json::str(model))]),
+        )
+        .unwrap();
+        let said = call(
+            &mut server,
+            "load_tape",
+            Json::obj([("path", Json::str(path.display().to_string()))]),
+        )
+        .unwrap_or_else(|e| panic!("{model}: {e}"));
+        let mark = server.session.spec.bus.peek_raw(40000);
+        assert_eq!(mark, 42, "{model}: the program did not run. Told: {said}");
+    }
+    let _ = std::fs::remove_file(&path);
+}
+
+// Reading the tape isn't the same as the game running, and on a machine a game
+// doesn't suit it ends up back at a prompt. Only the PC can say so.
+#[test]
+fn autoload_says_where_the_machine_ended_up() {
+    if std::fs::read("roms/48.rom").is_err() {
+        eprintln!("need roms/48.rom; skipping");
+        return;
+    }
+    let path = std::env::temp_dir().join(format!("zxrs-prompt-{}.tap", std::process::id()));
+    std::fs::write(&path, poking_tape()).unwrap();
+    let mut server = Server::new();
+    let said = call(
+        &mut server,
+        "load_tape",
+        Json::obj([("path", Json::str(path.display().to_string()))]),
+    )
+    .unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(
+        said.contains("PC is in the ROM"),
+        "the program has finished and BASIC is waiting: {said}"
+    );
+}
+
+// A loader that never starts must not look like a game that has. $FF everywhere
+// is a machine that runs and never reads a tape, whichever ROM it should have had.
+#[test]
+fn autoload_says_so_when_the_machine_never_starts_reading_the_tape() {
+    let mut server = Server::new();
+    server.session.rom_loaded = true;
+    // One standard block: a TAP's length, a flag, a byte and its checksum.
+    let path = std::env::temp_dir().join(format!("zxrs-autoload-{}.tap", std::process::id()));
+    std::fs::write(&path, [3, 0, 0xFF, 0x01, 0xFE]).unwrap();
+    let result = call(
+        &mut server,
+        "load_tape",
+        Json::obj([("path", Json::str(path.display().to_string()))]),
+    );
+    let _ = std::fs::remove_file(&path);
+    let err = result.expect_err("nothing read the tape and this reported success");
+    assert!(err.contains("never started reading"), "{err}");
+}
+
 /// A routine run a few times, for what the export says about it.
 fn run_a_small_program(server: &mut Server) {
     // $8000: LD HL,$9000 : INC (HL) : JP $8000

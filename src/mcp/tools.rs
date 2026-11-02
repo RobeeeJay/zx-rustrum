@@ -15,6 +15,9 @@ use crate::rzx::Recording;
 use crate::snapshot;
 use crate::tape::Tape;
 
+/// Where the ROM's tape loader starts, on every model here.
+const LD_BYTES: u16 = 0x0556;
+
 /// What the client is told the server is for, at the handshake.
 pub const INSTRUCTIONS: &str = "\
 Drives a ZX Spectrum emulator so a program can be taken apart and understood: \
@@ -457,13 +460,88 @@ impl Session {
         if flag(args, "autoload", true) {
             let report = self.autoload()?;
             return Ok(format!(
-                "Loaded {} ({blocks} blocks) and started it. {report}",
+                "Loaded {} ({blocks} blocks), and the machine read it. {report}",
                 path.display()
             ));
         }
         Ok(format!(
             "{} is in the deck: {blocks} blocks. Nothing is playing yet.",
             path.display()
+        ))
+    }
+
+    /// Start the machine's own tape loading and let the tape run until it
+    /// stops, with the ROM's loader handed over where it can be — a tape plays
+    /// at 1,500 baud however fast the machine is run, and waiting for it in real
+    /// time is forty minutes of nothing.
+    fn autoload(&mut self) -> Result<String, String> {
+        self.spec.reset();
+        self.spec.bus.tape_flash = true;
+        self.spec.bus.tape_boost = true;
+        // Every ROM here loads through LD-BYTES at $0556, so that being called
+        // is how to know something is reading the tape. A tape plays to its end
+        // whether anything is listening or not, so its ending says nothing.
+        let kept = std::mem::replace(&mut self.spec.breakpoints, vec![LD_BYTES]);
+        let mut reading = false;
+        self.frames_watching(120, &mut reading);
+        // J, then symbol-shift P twice, then ENTER: LOAD "" as the 48K ROM wants
+        // it typed. The menu on the others ignores the letters and takes the
+        // ENTER as its first line, which is the tape loader.
+        for keys in [
+            &[(6usize, 3u8)][..],
+            &[(7, 1), (5, 0)][..],
+            &[(7, 1), (5, 0)][..],
+            &[(6, 0)][..],
+        ] {
+            for (row, bit) in keys {
+                self.spec.bus.keys[*row] &= !(1 << bit);
+            }
+            self.frames_watching(4, &mut reading);
+            for (row, bit) in keys {
+                self.spec.bus.keys[*row] |= 1 << bit;
+            }
+            self.frames_watching(4, &mut reading);
+        }
+        // A +3 tries its disk first, and the drive takes seconds to say no.
+        for _ in 0..150 {
+            if reading {
+                break;
+            }
+            self.frames_watching(10, &mut reading);
+        }
+        if !reading {
+            self.spec.breakpoints = kept;
+            return Err(format!(
+                "the {} never started reading the tape: LD-BYTES at ${LD_BYTES:04X} was not \
+                 called. The tape is in the deck and has not moved, and PC is ${:04X}.",
+                self.spec.bus.model.name(),
+                self.spec.cpu.pc
+            ));
+        }
+        self.spec.breakpoints = kept;
+        let now = self.spec.bus.total_t();
+        if let Some(tape) = self.spec.bus.tape.as_mut() {
+            tape.play(now);
+        }
+        let mut frames = 0u32;
+        while self.spec.bus.tape_playing() && frames < 60 * 60 * 10 {
+            self.spec.run(FRAME_T);
+            frames += 1;
+        }
+        // A moment more, so a loader that starts the game as the tape ends has
+        // somewhere to start it.
+        for _ in 0..200 {
+            self.spec.run(FRAME_T);
+        }
+        let pc = self.spec.cpu.pc;
+        let in_rom = if pc < 0x4000 {
+            " PC is in the ROM, which can be a game that has gone back to a prompt or crashed: \
+             look at the screen before believing it's running."
+        } else {
+            ""
+        };
+        Ok(format!(
+            "The tape ran for {frames} frames; PC is now ${pc:04X}.{in_rom}"
         ))
     }
 
@@ -479,56 +557,17 @@ impl Session {
         }
     }
 
-    /// Type LOAD "" and let the tape run until it stops, with the ROM's own
-    /// loading handed over where it can be — a tape plays at 1,500 baud
-    /// however fast the machine is run, and waiting for it in real time is
-    /// forty minutes of nothing.
-    fn autoload(&mut self) -> Result<String, String> {
-        self.spec.reset();
-        self.spec.bus.tape_flash = true;
-        self.spec.bus.tape_boost = true;
-        for _ in 0..120 {
-            self.spec.run(FRAME_T);
-        }
-        // J, then symbol-shift P twice, then ENTER: LOAD "" as the 48K ROM
-        // wants it typed.
-        for keys in [
-            &[(6usize, 3u8)][..],
-            &[(7, 1), (5, 0)][..],
-            &[(7, 1), (5, 0)][..],
-            &[(6, 0)][..],
-        ] {
-            for (row, bit) in keys {
-                self.spec.bus.keys[*row] &= !(1 << bit);
-            }
-            for _ in 0..4 {
-                self.spec.run(FRAME_T);
-            }
-            for (row, bit) in keys {
-                self.spec.bus.keys[*row] |= 1 << bit;
-            }
-            for _ in 0..4 {
-                self.spec.run(FRAME_T);
+    /// Run this many frames, noting if the breakpoint on LD-BYTES is reached.
+    /// It stops there before the instruction runs, so the machine carries on
+    /// from it with the breakpoint taken off.
+    fn frames_watching(&mut self, frames: u32, reading: &mut bool) {
+        let until = self.spec.bus.frame + frames as u64;
+        while self.spec.bus.frame < until {
+            if let Stop::Breakpoint(LD_BYTES) = self.spec.run(FRAME_T) {
+                *reading = true;
+                self.spec.breakpoints.clear();
             }
         }
-        let now = self.spec.bus.total_t();
-        if let Some(tape) = self.spec.bus.tape.as_mut() {
-            tape.play(now);
-        }
-        let mut frames = 0u32;
-        while self.spec.bus.tape_playing() && frames < 60 * 60 * 10 {
-            self.spec.run(FRAME_T);
-            frames += 1;
-        }
-        // A moment more, so a loader that starts the game as the tape ends has
-        // somewhere to start it.
-        for _ in 0..200 {
-            self.spec.run(FRAME_T);
-        }
-        Ok(format!(
-            "The tape ran for {frames} frames; PC is now ${:04X}",
-            self.spec.cpu.pc
-        ))
     }
 
     fn load_snapshot(&mut self, args: &Json) -> Result<String, String> {
