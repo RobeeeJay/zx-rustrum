@@ -781,7 +781,13 @@ pub fn export_listing(session: &mut Session, args: &Json) -> Result<String, Stri
                 if at as u32 + i as u32 > to as u32 {
                     break;
                 }
-                bytes.push(session.spec.bus.peek_raw(at.wrapping_add(i)));
+                // A row stops where code starts, or it runs over the first
+                // instructions of whatever comes next.
+                let next = at.wrapping_add(i);
+                if i > 0 && session.spec.bus.observer.was_executed(next) {
+                    break;
+                }
+                bytes.push(session.spec.bus.peek_raw(next));
             }
             if bytes.is_empty() {
                 break;

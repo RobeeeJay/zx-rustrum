@@ -1134,3 +1134,47 @@ fn a_disk_in_a_zip_can_be_mounted_from_the_server() {
     let _ = std::fs::remove_file(&copy);
     let _ = std::fs::remove_file(&zip);
 }
+
+/// A row of bytes stops where code starts. Sixteen at a time regardless, the
+/// row ran over the start of whatever came next, and the first instructions
+/// of a routine went out as data: 193 of the 1,943 that ran in Jetpac.
+#[test]
+fn the_listing_does_not_swallow_code_that_starts_inside_a_row_of_data() {
+    let mut server = Server::new();
+    drawing_program(&mut server);
+    call(&mut server, "watch_routines", Json::obj([])).unwrap();
+    call(
+        &mut server,
+        "run_tstates",
+        Json::obj([("tstates", Json::num(20_000))]),
+    )
+    .unwrap();
+
+    let path = std::env::temp_dir().join(format!("zxrs-row-{}.asm", std::process::id()));
+    call(
+        &mut server,
+        "export_listing",
+        Json::obj([
+            ("path", Json::str(path.display().to_string())),
+            // Six bytes short of the routine, so a row of sixteen would run
+            // ten bytes into it.
+            ("from", Json::str("$8FFA")),
+            ("to", Json::str("$9020")),
+        ]),
+    )
+    .unwrap();
+    let listing = std::fs::read_to_string(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(
+        listing
+            .lines()
+            .any(|l| l.starts_with("$8FFA  DEFB") && l.matches('$').count() == 7),
+        "six bytes of data and no more, then the code: {listing}"
+    );
+    assert!(
+        listing
+            .lines()
+            .any(|l| l.starts_with("$9000") && l.contains("LD HL,$4000")),
+        "the routine's first instruction is an instruction: {listing}"
+    );
+}
