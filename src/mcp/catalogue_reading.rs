@@ -7,6 +7,18 @@ use crate::mcp::json::Json;
 pub fn tools() -> Vec<Json> {
     vec![
         tool(
+            "unexplained",
+            "What has run and has no explanation yet, biggest gap first: for each labelled \
+             stretch of code, whether it says what it does and how many of its instructions \
+             have a comment, and which routines have no name. It only counts: a bad comment \
+             counts the same as a good one. Use it to choose what to read next.",
+            [
+                ("from", address("lowest address (default $5B00)")),
+                ("to", address("highest address (default $FFFF)")),
+                ("limit", prop("integer", "how many to list (default 30)")),
+            ],
+        ),
+        tool(
             "self_modifying",
             "What has rewritten code that had already run, and with what: a patched \
              operand, a jump turned on and off, or a loader moving a block over its own \

@@ -137,6 +137,22 @@ four bytes ran as a bootstrap before its loader moved the program over them, so
 what's there now decodes as nonsense that `coverage` follows. Where a table ends
 is a guess, and a word beyond it may get listed.
 
+**What's left to explain.** `unexplained`.
+
+For each labelled stretch of run code it says whether there's a description and how
+many instructions have a comment of their own, biggest gap first, and which called
+routines have no name. It only counts. A bad comment scores the same as a good one,
+so what it's for is choosing what to read next, and it can't tell you you've
+finished.
+
+`export_listing` adds what was measured to what was written, so a listing with few
+comments still says something. Above each label, `; used by:` names the routines that
+mention it and `; seen:` says how often it was called and what it wrote. Beside an
+instruction, `[never taken]` and `[always taken]` are branches that only went one way,
+`[forced]` is code that only ran under `force_branch`, and `[rewritten by …]` was
+changed after it ran. They're told apart from comments by being in that form, and
+`facts: false` leaves them out.
+
 **What it does to itself.** `self_modifying`, `watch_value`, `value_log`.
 
 A listing shows one moment's bytes, and on a program that patches its own code,

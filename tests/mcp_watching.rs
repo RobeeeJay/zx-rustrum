@@ -312,3 +312,150 @@ fn forcing_can_start_from_a_saved_state() {
     .unwrap_err();
     assert!(err.contains("no state called"), "{err}");
 }
+
+fn listing(server: &mut Server, from: &str, to: &str, facts: bool) -> String {
+    // Tests run side by side, and two asking for the same range must not share
+    // a file.
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let file = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path =
+        std::env::temp_dir().join(format!("zxrs-watching-{}-{file}.lst", std::process::id()));
+    call(
+        server,
+        "export_listing",
+        Json::obj([
+            ("path", Json::str(path.display().to_string())),
+            ("from", Json::str(from)),
+            ("to", Json::str(to)),
+            ("facts", Json::Bool(facts)),
+        ]),
+    )
+    .unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    text
+}
+
+fn label(server: &mut Server, address: &str, name: &str) {
+    call(
+        server,
+        "set_comment",
+        Json::obj([("address", Json::str(address)), ("label", Json::str(name))]),
+    )
+    .unwrap();
+}
+
+// A listing can only say what somebody wrote, unless what was measured goes in
+// too. Who uses a routine is the first thing a reader asks and can't be wrong.
+#[test]
+fn the_listing_says_what_uses_a_label_and_what_it_was_seen_doing() {
+    let mut server = start(&[
+        // $8000: main: CALL $9000 : JR $8000
+        (0x8000, &[0xCD, 0x00, 0x90, 0x18, 0xFB]),
+        // $9000: draw: SCF : LD ($4000),A : JP NC,$9000 : RET, which never jumps but
+        // names draw from inside draw.
+        (0x9000, &[0x37, 0x32, 0x00, 0x40, 0xD2, 0x00, 0x90, 0xC9]),
+    ]);
+    label(&mut server, "$8000", "main");
+    label(&mut server, "$9000", "draw");
+    run(&mut server, 2_000);
+    let text = listing(&mut server, "$8000", "$9005", true);
+    assert!(text.contains("CALL draw"), "{text}");
+    assert!(text.contains("; used by: main"), "{text}");
+    assert!(text.contains("; seen: called"), "{text}");
+    assert!(
+        !text.contains("; used by: draw"),
+        "a routine does not use itself: {text}"
+    );
+}
+
+// The comment says what somebody thinks a branch is for. Whether it has ever
+// gone that way is a different kind of fact, and they should be told apart.
+#[test]
+fn the_listing_marks_what_was_measured_about_an_instruction() {
+    let mut server = one_sided();
+    run(&mut server, 500);
+    call(&mut server, "force_branch", at("$8003")).unwrap();
+    let text = listing(&mut server, "$8000", "$8010", true);
+    assert!(
+        text.lines()
+            .any(|l| l.starts_with("$8003") && l.contains("[never taken]")),
+        "{text}"
+    );
+    assert!(
+        text.lines()
+            .any(|l| l.starts_with("$8009") && l.contains("[forced]")),
+        "{text}"
+    );
+    assert!(
+        !text
+            .lines()
+            .any(|l| l.starts_with("$8000") && l.contains("[")),
+        "nothing to say about $8000: {text}"
+    );
+    let plain = listing(&mut server, "$8000", "$8010", false);
+    assert!(
+        !plain.contains("[never taken]"),
+        "asked for none of it: {plain}"
+    );
+}
+
+#[test]
+fn the_listing_marks_code_that_was_rewritten_after_it_ran() {
+    let mut server = start(&[(0x8000, &[0x3E, 0x01, 0x3C, 0x32, 0x01, 0x80, 0x18, 0xF8])]);
+    label(&mut server, "$8000", "patcher");
+    run(&mut server, 500);
+    let text = listing(&mut server, "$8000", "$8007", true);
+    assert!(
+        text.lines()
+            .any(|l| l.starts_with("$8000") && l.contains("[rewritten by patcher with $02")),
+        "{text}"
+    );
+}
+
+// What makes "the comments look sparse" something to act on: the biggest hole
+// is what to read next, and it should shrink as it gets filled.
+#[test]
+fn unexplained_puts_the_biggest_gap_first_and_counts_what_gets_written() {
+    let mut server = start(&[
+        (0x8000, &[0xCD, 0x00, 0x90, 0xCD, 0x10, 0x90, 0x18, 0xF8]),
+        (0x9000, &[0x00, 0xC9]),
+        (0x9010, &[0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC9]),
+    ]);
+    label(&mut server, "$8000", "main");
+    label(&mut server, "$9000", "small");
+    label(&mut server, "$9010", "big");
+    run(&mut server, 2_000);
+
+    let range = Json::obj([("from", Json::str("$8000")), ("to", Json::str("$9020"))]);
+    let report = call(&mut server, "unexplained", range.clone()).unwrap();
+    assert!(report.contains("0 of 3 routines"), "{report}");
+    let big = report.find("big").expect(&report);
+    let small = report.find("small").expect(&report);
+    assert!(big < small, "the larger gap comes first: {report}");
+
+    call(
+        &mut server,
+        "set_comment",
+        Json::obj([
+            ("address", Json::str("$9010")),
+            ("comment", Json::str("waits")),
+        ]),
+    )
+    .unwrap();
+    call(
+        &mut server,
+        "set_comment",
+        Json::obj([
+            ("address", Json::str("$9011")),
+            ("comment", Json::str("second")),
+        ]),
+    )
+    .unwrap();
+    let report = call(&mut server, "unexplained", range).unwrap();
+    assert!(report.contains("1 of 3 routines"), "{report}");
+    assert!(
+        report.contains("1 of 12 instructions"),
+        "the description is not a comment on an instruction: {report}"
+    );
+}

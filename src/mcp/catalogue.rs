@@ -956,6 +956,15 @@ fn own_tools() -> Vec<Json> {
                 ("path", prop("string", "where to write it")),
                 ("from", address("lowest address (default $4000)")),
                 ("to", address("highest address (default $FFFF)")),
+                (
+                    "facts",
+                    prop(
+                        "boolean",
+                        "the measured lines and marks: who uses what, what a routine was seen \
+                         doing, branches that only went one way, code rewritten or forced \
+                         (default true)",
+                    ),
+                ),
             ],
             &["path"],
         ),
