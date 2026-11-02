@@ -782,9 +782,15 @@ pub fn export_listing(session: &mut Session, args: &Json) -> Result<String, Stri
                     break;
                 }
                 // A row stops where code starts, or it runs over the first
-                // instructions of whatever comes next.
+                // instructions of whatever comes next; and at a note, which
+                // is only written against the address a row starts at.
                 let next = at.wrapping_add(i);
-                if i > 0 && session.spec.bus.observer.was_executed(next) {
+                if i > 0
+                    && (session.spec.bus.observer.was_executed(next)
+                        || !session.notes.label(next).is_empty()
+                        || session.symbols.get(next).is_some()
+                        || !session.notes.comment(next).is_empty())
+                {
                     break;
                 }
                 bytes.push(session.spec.bus.peek_raw(next));

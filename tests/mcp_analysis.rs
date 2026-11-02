@@ -1138,6 +1138,49 @@ fn a_disk_in_a_zip_can_be_mounted_from_the_server() {
 /// A row of bytes stops where code starts. Sixteen at a time regardless, the
 /// row ran over the start of whatever came next, and the first instructions
 /// of a routine went out as data: 193 of the 1,943 that ran in Jetpac.
+// Variables and tables are named where they are, and those are rarely on a
+// sixteen-byte boundary. Jetpac's listing lost 35 of its 180 notes this way,
+// among them the object table the whole game hangs from.
+#[test]
+fn the_listing_keeps_a_note_on_a_byte_in_the_middle_of_a_row_of_data() {
+    let mut server = Server::new();
+    drawing_program(&mut server);
+    call(
+        &mut server,
+        "set_comment",
+        Json::obj([
+            ("address", Json::str("$8FF5")),
+            ("label", Json::str("named_in_a_row")),
+            ("comment", Json::str("says what this is")),
+        ]),
+    )
+    .unwrap();
+
+    let path = std::env::temp_dir().join(format!("zxrs-note-{}.asm", std::process::id()));
+    call(
+        &mut server,
+        "export_listing",
+        Json::obj([
+            ("path", Json::str(path.display().to_string())),
+            ("from", Json::str("$8FF0")),
+            ("to", Json::str("$8FFF")),
+        ]),
+    )
+    .unwrap();
+    let listing = std::fs::read_to_string(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(
+        listing.contains("named_in_a_row:"),
+        "the label on $8FF5 is gone: {listing}"
+    );
+    assert!(
+        listing
+            .lines()
+            .any(|l| l.starts_with("$8FF5  DEFB") && l.contains("says what this is")),
+        "the comment on $8FF5 is gone: {listing}"
+    );
+}
+
 #[test]
 fn the_listing_does_not_swallow_code_that_starts_inside_a_row_of_data() {
     let mut server = Server::new();
