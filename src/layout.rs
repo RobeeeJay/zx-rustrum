@@ -16,11 +16,13 @@ pub enum Kind {
     Words,
     Text,
     /// `width` bytes a row for `rows` rows, after `header` bytes that are not
-    /// picture.
+    /// picture. Some programs draw up the screen, so the first row in memory is
+    /// the bottom of the picture.
     Bitmap {
         width: u8,
         rows: u16,
         header: u8,
+        bottom_up: bool,
     },
 }
 
@@ -84,8 +86,8 @@ impl Layout {
             && self.bindings.is_empty()
     }
 
-    /// The name of a byte inside a record: `rocket.x`, or `objects[6].x` where
-    /// the slot has no name of its own or only the whole table's.
+    /// The name of a byte inside a record: `rocket.x` where the record has a
+    /// label, or `object[6].x` by its place in the table where it does not.
     pub fn field_name(&self, addr: u16, label: &dyn Fn(u16) -> String) -> Option<String> {
         let array = self.arrays.values().find(|a| {
             let size = self.structs.get(&a.of).map_or(0, |s| s.size) as u32;
@@ -95,16 +97,9 @@ impl Layout {
         let offset = addr - array.at;
         let slot = offset / shape.size;
         let within = (offset % shape.size) as u8;
-        let base = array.at + slot * shape.size;
-        let table = label(array.at);
-        let own = label(base);
-        let record = if own.is_empty() || (own == table && array.count > 1) {
-            let table = if table.is_empty() {
-                array.of.clone()
-            } else {
-                table
-            };
-            format!("{table}[{slot}]")
+        let own = label(array.at + slot * shape.size);
+        let record = if own.is_empty() {
+            format!("{}[{slot}]", array.of)
         } else {
             own
         };
@@ -180,7 +175,12 @@ impl Layout {
                     width,
                     rows,
                     header,
-                } => format!("data {:04X} bitmap {width} {rows} {header}", typed.at),
+                    bottom_up,
+                } => format!(
+                    "data {:04X} bitmap {width} {rows} {header}{}",
+                    typed.at,
+                    if bottom_up { " bottom_up" } else { "" }
+                ),
             });
         }
         out
@@ -238,11 +238,11 @@ impl Layout {
                     self.set_data(at, Kind::Text, length);
                 }
             }
-            ["data", at, "bitmap", width, rows, header] => {
+            ["data", at, "bitmap", width, rows, header, rest @ ..] => {
                 if let (Some(at), Some(width), Some(rows), Some(header)) =
                     (hex(at), number(width), number(rows), number(header))
                 {
-                    self.set_bitmap(at, width as u8, rows, header as u8);
+                    self.set_bitmap(at, width as u8, rows, header as u8, rest == ["bottom_up"]);
                 }
             }
             _ => {}
@@ -253,7 +253,7 @@ impl Layout {
         self.data.insert(at, Typed { at, kind, length });
     }
 
-    pub fn set_bitmap(&mut self, at: u16, width: u8, rows: u16, header: u8) {
+    pub fn set_bitmap(&mut self, at: u16, width: u8, rows: u16, header: u8, bottom_up: bool) {
         let length = header as u16 + width as u16 * rows;
         self.set_data(
             at,
@@ -261,6 +261,7 @@ impl Layout {
                 width,
                 rows,
                 header,
+                bottom_up,
             },
             length,
         );
@@ -358,8 +359,14 @@ pub fn rows(typed: &Typed, peek: &dyn Fn(u16) -> u8) -> Vec<Row> {
                 beside: String::new(),
             })
             .collect(),
-        Kind::Bitmap { width, header, .. } => {
+        Kind::Bitmap {
+            width,
+            header,
+            bottom_up,
+            ..
+        } => {
             let header = (header as usize).min(bytes.len());
+            let width = width.max(1) as usize;
             let mut out = Vec::new();
             if header > 0 {
                 out.push(Row {
@@ -369,12 +376,22 @@ pub fn rows(typed: &Typed, peek: &dyn Fn(u16) -> u8) -> Vec<Row> {
                     beside: String::new(),
                 });
             }
-            for (i, row) in bytes[header..].chunks(width.max(1) as usize).enumerate() {
+            let picture: Vec<&[u8]> = bytes[header..].chunks(width).collect();
+            for (i, row) in picture.iter().enumerate() {
+                // Upside-down rows can't be read as a picture, so the same rows
+                // go beside them again from the other end, which is what the
+                // screen will show. The first column stays the bytes on its line.
+                let beside = if bottom_up {
+                    let drawn = picture[picture.len() - 1 - i];
+                    format!("{} | {}", pixels(row), pixels(drawn))
+                } else {
+                    pixels(row)
+                };
                 out.push(Row {
-                    at: typed.at + header as u16 + i as u16 * width.max(1) as u16,
+                    at: typed.at + (header + i * width) as u16,
                     len: row.len() as u16,
                     directive: defb(row),
-                    beside: pixels(row),
+                    beside,
                 });
             }
             out

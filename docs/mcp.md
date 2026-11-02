@@ -197,13 +197,15 @@ $7E1E  DEFB $FF,$FF  ; ################
 
 The left-hand pixel is the byte's top bit, the same way up as the display file.
 Width, rows and how many bytes of header come first are yours to give, because a
-game's sprite format is its own. You are making a claim and nothing checks it,
+game's sprite format is its own. A game that draws up the screen keeps its sprites
+upside down, so `bottom_up` shows the row's own pixels and then, after a `|`, the
+picture the right way up. You are making a claim and nothing checks it,
 but it can't damage anything: however a stretch is shown, its rows stand for the
 same bytes, so the export still assembles back into the program.
 
 `define_struct` names the fields of a record. `struct_array` says records lie side
 by side at an address, so `LD A,($5D31)` reads `LD A,(rocket.x)` if that record has
-a label, or `objects[6].x` if it doesn't. `bind_struct` says that over a range of
+a label, or `object[6].x` if it doesn't. `bind_struct` says that over a range of
 code a register points at one, so `(IX+$05)` reads `(IX+speed)`. The narrowest
 binding wins, because one object table's `+5` is a speed to one handler and a
 countdown to the next. The listing replaces the numbers with the names. The export

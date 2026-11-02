@@ -118,6 +118,15 @@ pub fn tools() -> Vec<Json> {
                         "bytes before a bitmap that are not picture, such as its size (default 0)",
                     ),
                 ),
+                (
+                    "bottom_up",
+                    prop(
+                        "boolean",
+                        "the first row in memory is the bottom of the picture, for a program \
+                         that draws up the screen. Each row then shows its own pixels, then \
+                         the picture the right way up beside them.",
+                    ),
+                ),
             ],
             &["address", "kind"],
         ),
@@ -139,7 +148,7 @@ pub fn tools() -> Vec<Json> {
             "struct_array",
             "Say that records of one kind lie side by side here, so an absolute address \
              into them is named in the listing: $5D31 reads as rocket.x if the record has \
-             a label of its own, objects[6].x if it does not. A count of 0 takes it back.",
+             a label of its own, object[6].x if it does not. A count of 0 takes it back.",
             [
                 ("address", address("where the first one starts")),
                 ("struct", prop("string", "a name given to define_struct")),

@@ -2,7 +2,7 @@
 
 use crate::layout::{parse_fields, Binding, Kind, Struct};
 use crate::mcp::json::Json;
-use crate::mcp::tools::{addr, count, text, Session};
+use crate::mcp::tools::{addr, count, flag, text, Session};
 
 pub fn set_data(session: &mut Session, args: &Json) -> Result<String, String> {
     let at = addr(args, "address")?;
@@ -33,9 +33,10 @@ pub fn set_data(session: &mut Session, args: &Json) -> Result<String, String> {
                      not width {width}, rows {rows}, header {header}"
                 ));
             }
-            session
-                .notes
-                .change_layout(|l| l.set_bitmap(at, width as u8, rows as u16, header as u8));
+            let bottom_up = flag(args, "bottom_up", false);
+            session.notes.change_layout(|l| {
+                l.set_bitmap(at, width as u8, rows as u16, header as u8, bottom_up)
+            });
         }
         other => {
             return Err(format!(

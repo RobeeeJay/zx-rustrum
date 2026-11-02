@@ -94,6 +94,7 @@ fn every_kind_of_row_stands_for_exactly_the_bytes_it_was_made_from() {
             width: 2,
             rows: 7,
             header: 3,
+            bottom_up: true,
         },
     ] {
         let typed = Typed {
@@ -167,6 +168,21 @@ fn a_bitmap_is_listed_with_its_picture_beside_each_row() {
         text.contains("$8005  DEFB $81,$18  ; #......#...##..."),
         "second row: {text}"
     );
+}
+
+// Jetpac draws up the screen, so its FUEL reads upside down in memory order. The
+// bytes have to stay in the order they are, so the right way up goes beside them.
+#[test]
+fn a_bitmap_drawn_upwards_shows_the_picture_the_right_way_up_beside_its_own_bytes() {
+    let mut layout = Layout::default();
+    layout.set_bitmap(0x8000, 1, 2, 0, true);
+    let typed = layout.data[&0x8000];
+    let peek = |a: u16| if a == 0x8000 { 0xF0 } else { 0x0F };
+    let rows = rows(&typed, &peek);
+    assert_eq!(rows[0].directive, "DEFB $F0");
+    assert_eq!(rows[0].beside, "####.... | ....####");
+    assert_eq!(rows[1].directive, "DEFB $0F");
+    assert_eq!(rows[1].beside, "....#### | ####....");
 }
 
 // A table of addresses is the map of a program, and it is only one if the
@@ -248,9 +264,10 @@ fn an_address_inside_a_record_reads_as_the_record_and_the_field() {
         }
     };
     let name = |a| layout.field_name(a, &label);
-    assert_eq!(name(0x5D09).as_deref(), Some("objects[1].x"));
+    assert_eq!(name(0x5D09).as_deref(), Some("object[1].x"));
     assert_eq!(name(0x5D11).as_deref(), Some("rocket.x"));
-    assert_eq!(name(0x5D07).as_deref(), Some("objects[0]+7"));
+    assert_eq!(name(0x5D01).as_deref(), Some("objects.x"));
+    assert_eq!(name(0x5D0F).as_deref(), Some("object[1]+7"));
     assert_eq!(name(0x5D18), None, "past the end of the array");
 }
 
@@ -289,7 +306,8 @@ fn what_is_said_about_the_data_survives_being_written_and_read_back() {
     let mut layout = Layout::default();
     layout.set_data(0x8000, Kind::Words, 48);
     layout.set_data(0x8100, Kind::Text, 12);
-    layout.set_bitmap(0x8200, 2, 11, 3);
+    layout.set_bitmap(0x8200, 2, 11, 3, true);
+    layout.set_bitmap(0x8300, 1, 8, 0, false);
     layout.read_line("struct object 8 0=type 1=x");
     layout.read_line("array 5D00 object 30");
     layout.read_line("bind IX object 6000-7FFF");
