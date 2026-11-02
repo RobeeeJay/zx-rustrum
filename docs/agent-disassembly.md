@@ -75,10 +75,9 @@ reached, a death never died or a menu option never chosen stays DEFB.
 
 ## 4. What the data is
 
-- **Typed data in the notes.** They know labels, comments and CODE/DATA blocks.
-  They would need pointer tables, text, graphics with their width and masking,
-  level maps and structures — and `export_asm` would then write DEFW and DEFM
-  where it now writes DEFB for everything.
+- **Typed data in the notes.** `set_data` covers words, text and bitmaps, and
+  `define_struct` records. Masking and level maps aren't covered, and nothing
+  finds any of this: it has to be said by somebody who has looked.
 - **Detectors** for jump tables, strings (in the game's own font as well as
   ASCII) and sprite sheets.
 - **Unpacking and self-modifying code.** Flag writes into code that has run,

@@ -53,16 +53,17 @@ pub fn disassemble(session: &mut Session, args: &Json) -> Result<String, String>
         let mut notes = Vec::new();
         // Where the instruction names an address that has a name, say so on
         // the line: "CALL $0D6B" means nothing, "CALL $0D6B (rom_cls)" does.
-        if comments && insn.len == 3 {
-            let target = u16::from_le_bytes([insn.bytes[1], insn.bytes[2]]);
-            let own = session.notes.label(target);
-            let named = if own.is_empty() {
-                session.symbols.get(target).map(|(n, _)| n.to_string())
-            } else {
-                Some(own.to_string())
-            };
-            if let Some(name) = named {
-                notes.push(format!("-> {name}"));
+        if comments {
+            let mut named = Vec::new();
+            crate::layout::replace_addresses(&insn.text, &mut |value| {
+                if let Some(name) = crate::mcp::listing::name_of(session, value) {
+                    named.push(format!("-> {name}"));
+                }
+                None
+            });
+            notes.extend(named);
+            if let Some((_, said)) = session.notes.layout().name_displacement(at, &insn.text) {
+                notes.push(said);
             }
         }
         if executed {

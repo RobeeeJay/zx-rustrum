@@ -1173,10 +1173,10 @@ fn the_listing_keeps_a_note_on_a_byte_in_the_middle_of_a_row_of_data() {
         listing.contains("named_in_a_row:"),
         "the label on $8FF5 is gone: {listing}"
     );
+    // A labelled address has its description above it, where a routine's would
+    // go, rather than at the end of the row.
     assert!(
-        listing
-            .lines()
-            .any(|l| l.starts_with("$8FF5  DEFB") && l.contains("says what this is")),
+        listing.contains("named_in_a_row:\n; says what this is\n$8FF5  DEFB"),
         "the comment on $8FF5 is gone: {listing}"
     );
 }

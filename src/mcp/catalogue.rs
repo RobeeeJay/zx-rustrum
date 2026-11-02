@@ -8,7 +8,7 @@
 use crate::mcp::json::Json;
 
 /// A JSON Schema property.
-fn prop(kind: &str, description: &str) -> Json {
+pub(super) fn prop(kind: &str, description: &str) -> Json {
     Json::obj([
         ("type", Json::str(kind)),
         ("description", Json::str(description)),
@@ -16,7 +16,7 @@ fn prop(kind: &str, description: &str) -> Json {
 }
 
 /// An address property: a number, or a string like "$8000".
-fn address(description: &str) -> Json {
+pub(super) fn address(description: &str) -> Json {
     Json::obj([
         (
             "type",
@@ -26,11 +26,15 @@ fn address(description: &str) -> Json {
     ])
 }
 
-fn tool<const N: usize>(name: &str, description: &str, properties: [(&str, Json); N]) -> Json {
+pub(super) fn tool<const N: usize>(
+    name: &str,
+    description: &str,
+    properties: [(&str, Json); N],
+) -> Json {
     schema_tool(name, description, properties, &[])
 }
 
-fn schema_tool<const N: usize>(
+pub(super) fn schema_tool<const N: usize>(
     name: &str,
     description: &str,
     properties: [(&str, Json); N],
@@ -62,7 +66,13 @@ fn schema_tool<const N: usize>(
 }
 
 pub fn tools() -> Json {
-    Json::arr(vec![
+    let mut all = own_tools();
+    all.extend(crate::mcp::catalogue_reading::tools());
+    Json::arr(all)
+}
+
+fn own_tools() -> Vec<Json> {
+    vec![
         tool(
             "machine_info",
             "What machine is running, where it has got to, what is loaded, and whether \
@@ -955,5 +965,5 @@ pub fn tools() -> Json {
              line an address, readable and diffable without the emulator.",
             [],
         ),
-    ])
+    ]
 }

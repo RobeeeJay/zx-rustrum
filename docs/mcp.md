@@ -137,6 +137,32 @@ four bytes ran as a bootstrap before its loader moved the program over them, so
 what's there now decodes as nonsense that `coverage` follows. Where a table ends
 is a guess, and a word beyond it may get listed.
 
+**What the data is.** `set_data`, `define_struct`, `struct_array`, `bind_struct`.
+
+A listing of hex tells you nothing about a sprite. `set_data` says what a stretch
+holds, and the listing and `export_asm` then show it as that: words as `DEFW` with
+names for the addresses, text as `DEFM`, and a bitmap as rows of `DEFB` with the
+picture beside each one:
+
+```text
+$7E1C  DEFB $18,$18  ; ...##......##...
+$7E1E  DEFB $FF,$FF  ; ################
+```
+
+The left-hand pixel is the byte's top bit, the same way up as the display file.
+Width, rows and how many bytes of header come first are yours to give, because a
+game's sprite format is its own. You are making a claim and nothing checks it,
+but it can't damage anything: however a stretch is shown, its rows stand for the
+same bytes, so the export still assembles back into the program.
+
+`define_struct` names the fields of a record. `struct_array` says records lie side
+by side at an address, so `LD A,($5D31)` reads `LD A,(rocket.x)` if that record has
+a label, or `objects[6].x` if it doesn't. `bind_struct` says that over a range of
+code a register points at one, so `(IX+$05)` reads `(IX+speed)`. The narrowest
+binding wins, because one object table's `+5` is a speed to one handler and a
+countdown to the next. The listing replaces the numbers with the names. The export
+can't, since an assembler needs the numbers, so it says so in a comment beside them.
+
 **Searching it.** `find_bytes`, `changed_since`.
 
 The variable hunt: `save_state`, lose a life, `changed_since` — the counter is

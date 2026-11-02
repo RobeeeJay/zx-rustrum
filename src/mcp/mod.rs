@@ -7,12 +7,14 @@
 pub mod activity;
 pub mod analysis;
 pub mod catalogue;
+pub mod catalogue_reading;
 pub mod control;
 pub mod coverage;
 pub mod deck;
 pub mod disk;
 pub mod input;
 pub mod json;
+pub mod layout;
 pub mod listing;
 pub mod looking;
 pub mod memory;

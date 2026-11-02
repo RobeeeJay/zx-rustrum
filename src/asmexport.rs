@@ -282,6 +282,9 @@ enum Body {
     Code(String),
     /// Bytes, and the instruction they are if they are one.
     Data(Vec<u8>, Option<String>),
+    /// What somebody has said a stretch is: the directive, how many bytes it
+    /// covers, and what goes beside it.
+    Typed(String, u16, String),
 }
 
 struct Line {
@@ -313,6 +316,17 @@ pub fn write(src: &Source) -> Exported {
     let mut at: u32 = FROM as u32;
     while at <= 0xFFFF {
         let a = at as u16;
+        if let Some(typed) = src.notes.layout().data.get(&a) {
+            for row in crate::layout::rows(typed, &peek) {
+                lines.push(Line {
+                    at: row.at,
+                    body: Body::Typed(row.directive, row.len, row.beside),
+                    inner: Vec::new(),
+                });
+                at += row.len as u32;
+            }
+            continue;
+        }
         if src.ran[a as usize] {
             let insn = disasm::disasm(&peek, a);
             let len = insn.len.max(1) as u32;
@@ -346,7 +360,11 @@ pub fn write(src: &Source) -> Exported {
         let mut next = at + 1;
         while next <= 0xFFFF && bytes.len() < 16 {
             let b = next as u16;
-            if src.ran[b as usize] || labelled(b) || commented(b) {
+            if src.ran[b as usize]
+                || labelled(b)
+                || commented(b)
+                || src.notes.layout().data.contains_key(&b)
+            {
                 break;
             }
             bytes.push(peek(b));
@@ -372,43 +390,25 @@ pub fn write(src: &Source) -> Exported {
     // Addresses in instructions become names where there are names for them.
     let mut rom_names: BTreeMap<u16, String> = BTreeMap::new();
     let mut named = |text: &str| -> String {
-        let mut out = String::new();
-        let chars: Vec<char> = text.chars().collect();
-        let mut i = 0;
-        while i < chars.len() {
-            let four = i + 5 <= chars.len()
-                && chars[i] == '$'
-                && chars[i + 1..i + 5].iter().all(|c| c.is_ascii_hexdigit())
-                && !chars.get(i + 5).is_some_and(|c| c.is_ascii_hexdigit());
-            if four {
-                let hex: String = chars[i + 1..i + 5].iter().collect();
-                let value = u16::from_str_radix(&hex, 16).expect("four hex digits");
-                let name = if value >= FROM {
-                    ram_names.get(&value).map(|(n, _)| n.clone())
-                } else if let Some(n) = rom_names.get(&value) {
-                    Some(n.clone())
-                } else {
-                    (src.rom_name)(value).map(|wanted| {
-                        let n = names.claim(&wanted, value);
-                        rom_names.insert(value, n.clone());
-                        n
-                    })
-                };
-                if let Some(name) = name {
-                    out.push_str(&name);
-                    i += 5;
-                    continue;
-                }
+        crate::layout::replace_addresses(text, &mut |value| {
+            if value >= FROM {
+                ram_names.get(&value).map(|(n, _)| n.clone())
+            } else if let Some(n) = rom_names.get(&value) {
+                Some(n.clone())
+            } else {
+                (src.rom_name)(value).map(|wanted| {
+                    let n = names.claim(&wanted, value);
+                    rom_names.insert(value, n.clone());
+                    n
+                })
             }
-            out.push(chars[i]);
-            i += 1;
-        }
-        out
+        })
     };
     let bodies: Vec<String> = lines
         .iter()
         .map(|l| match &l.body {
             Body::Code(text) => named(text),
+            Body::Typed(directive, _, _) => named(directive),
             Body::Data(bytes, _) => format!(
                 "DEFB {}",
                 bytes
@@ -474,7 +474,18 @@ pub fn write(src: &Source) -> Exported {
             beside.push(format!("{guess}{comment}"));
         }
         match &line.body {
-            Body::Code(_) => instructions += 1,
+            Body::Code(text) => {
+                instructions += 1;
+                if let Some((_, said)) = src.notes.layout().name_displacement(line.at, text) {
+                    beside.push(said);
+                }
+            }
+            Body::Typed(_, length, said) => {
+                data_bytes += *length as usize;
+                if !said.is_empty() {
+                    beside.push(said.clone());
+                }
+            }
             Body::Data(bytes, text) => {
                 data_bytes += bytes.len();
                 if let Some(text) = text {

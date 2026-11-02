@@ -20,6 +20,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::blocks::Block;
+use crate::layout::Layout;
 
 /// What is written against one address. Either half may be empty; an entry
 /// with both empty is dropped rather than written out.
@@ -48,6 +49,9 @@ pub struct Notes {
     /// Kept here rather than in a file of their own: it is one more thing
     /// known about the same program, and two files would come apart.
     blocks: Vec<Block>,
+    /// What the data is, where somebody has said: tables, text, bitmaps and
+    /// records. For the same reason, it is in this file too.
+    layout: Layout,
     /// Where these are written. None when nothing is loaded to write beside,
     /// in which case the notes are still usable, just not kept.
     path: Option<PathBuf>,
@@ -73,6 +77,7 @@ impl Notes {
         Notes {
             entries: parse(&text),
             blocks: parse_blocks(&text),
+            layout: parse_layout(&text),
             path: Some(path),
             dirty: false,
         }
@@ -185,6 +190,20 @@ impl Notes {
         self.dirty = true;
     }
 
+    /// What the data is.
+    pub fn layout(&self) -> &Layout {
+        &self.layout
+    }
+
+    /// Say something about what the data is.
+    pub fn change_layout(&mut self, change: impl FnOnce(&mut Layout)) {
+        let before = self.layout.clone();
+        change(&mut self.layout);
+        if self.layout != before {
+            self.dirty = true;
+        }
+    }
+
     /// How many addresses have anything written against them.
     pub fn len(&self) -> usize {
         self.entries.len()
@@ -193,11 +212,12 @@ impl Notes {
     /// Throw the lot away. The file goes with them when the notes are next
     /// written, which is what makes this worth a confirmation.
     pub fn clear(&mut self) {
-        if self.entries.is_empty() && self.blocks.is_empty() {
+        if self.entries.is_empty() && self.blocks.is_empty() && self.layout.is_empty() {
             return;
         }
         self.entries.clear();
         self.blocks.clear();
+        self.layout = Layout::default();
         self.dirty = true;
     }
 
@@ -231,7 +251,8 @@ impl Notes {
         };
         // An empty set of notes leaves no litter behind: the file is removed
         // rather than left as a header with nothing under it.
-        let result = if self.entries.is_empty() && self.blocks.is_empty() {
+        let result = if self.entries.is_empty() && self.blocks.is_empty() && self.layout.is_empty()
+        {
             match std::fs::remove_file(&path) {
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
                 other => other,
@@ -256,8 +277,17 @@ impl Notes {
              #   ADDR [label] [; comment]\n\
              # a comment's line breaks are written \\n, and a backslash \\\\\n\
              # and where the routines and the data are:\n\
-             #   block CODE|DATA FROM-TO\n",
+             #   block CODE|DATA FROM-TO\n\
+             # and what the data is:\n\
+             #   data ADDR words COUNT | text LENGTH | bitmap WIDTH ROWS HEADER\n\
+             #   struct NAME SIZE OFFSET=FIELD ...\n\
+             #   array ADDR STRUCT COUNT\n\
+             #   bind IX|IY STRUCT FROM-TO\n",
         );
+        for line in self.layout.to_lines() {
+            out.push_str(&line);
+            out.push('\n');
+        }
         for block in &self.blocks {
             out.push_str(&crate::blocks::to_line(block));
             out.push('\n');
@@ -311,6 +341,15 @@ fn unescape(comment: &str) -> String {
         }
     }
     out
+}
+
+/// What the data is, from a notes file.
+pub fn parse_layout(text: &str) -> Layout {
+    let mut layout = Layout::default();
+    for line in text.lines() {
+        layout.read_line(line.trim());
+    }
+    layout
 }
 
 /// The block lines from a notes file, in address order.

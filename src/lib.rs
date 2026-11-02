@@ -23,6 +23,7 @@ pub mod if1;
 pub mod ipf;
 pub mod joystick;
 pub mod keyboard;
+pub mod layout;
 pub mod listing;
 pub mod logo;
 pub mod loops;

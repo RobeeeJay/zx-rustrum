@@ -189,11 +189,12 @@ impl Session {
             "save_comments" => crate::mcp::analysis::save_comments(self, args).map(Reply::Text),
             "find_bytes" | "changed_since" | "run_until" | "run_tstates" | "watch_events"
             | "watch_routines" | "routines" | "routine" | "call_graph" | "code_map"
-            | "coverage" | "indirect_jumps" | "xrefs" | "autodoc" | "blocks" | "profile"
-            | "frame_timing" | "sound_state" | "paging" | "memory_activity" | "tape_blocks"
-            | "loader" | "save_state" | "restore_state" | "step_forward" | "step_back"
-            | "press_keys" | "type_text" | "mouse" | "printout" | "load_symbols" | "symbols"
-            | "identify" | "export_listing" | "export_asm" | "load_tape" | "load_snapshot"
+            | "set_data" | "define_struct" | "struct_array" | "bind_struct" | "coverage"
+            | "indirect_jumps" | "xrefs" | "autodoc" | "blocks" | "profile" | "frame_timing"
+            | "sound_state" | "paging" | "memory_activity" | "tape_blocks" | "loader"
+            | "save_state" | "restore_state" | "step_forward" | "step_back" | "press_keys"
+            | "type_text" | "mouse" | "printout" | "load_symbols" | "symbols" | "identify"
+            | "export_listing" | "export_asm" | "load_tape" | "load_snapshot"
             | "load_recording" | "play_recording" => Err(zx81::not_here(name)),
             other => Err(format!("no tool called {other:?}; try tools/list")),
         }
@@ -251,6 +252,10 @@ impl Session {
             "routine" => crate::mcp::analysis::routine(self, args),
             "call_graph" => crate::mcp::analysis::call_graph(self, args),
             "code_map" => crate::mcp::analysis::code_map(self, args),
+            "set_data" => crate::mcp::layout::set_data(self, args),
+            "define_struct" => crate::mcp::layout::define_struct(self, args),
+            "struct_array" => crate::mcp::layout::struct_array(self, args),
+            "bind_struct" => crate::mcp::layout::bind_struct(self, args),
             "coverage" => crate::mcp::coverage::coverage(self, args),
             "indirect_jumps" => crate::mcp::coverage::indirect_jumps(self, args),
             "blocks" => crate::mcp::analysis::blocks(self, args),
