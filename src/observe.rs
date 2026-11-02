@@ -268,6 +268,8 @@ pub struct Observer {
     /// per routine, three separate reads of the keyboard in one loop are a
     /// single line saying "this routine reads ports".
     pub port_sites: BTreeMap<u16, Site>,
+    /// What each conditional and indirect jump was seen to do.
+    pub flow: crate::coverage::Flow,
     /// The address of the instruction being executed, so a port access can be
     /// attributed to the instruction making it. Set by the machine before each
     /// instruction; a port is read part-way through one, which is before

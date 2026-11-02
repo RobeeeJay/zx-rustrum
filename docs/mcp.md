@@ -112,6 +112,31 @@ decoding opcodes. Nothing is counted until `watch_routines` switches it on, and
 the tools say so rather than answering with an empty table that reads like an
 answer. It costs a branch on every access, so switch it off when finished.
 
+**How far it has got.** `coverage`, `indirect_jumps`.
+
+Code is what has run, so a disassembly built from watching stops at whatever
+was never played. `coverage` says where that edge is: what has run, what the
+code that has run could reach but has not, what has only been read, and which
+conditionals have only ever gone one way. What a conditional did is recorded as
+it runs, because "its target ran" does not mean it was ever taken. A one-sided
+branch says what to make happen next, and a stretch not reached says what that
+will find.
+
+`indirect_jumps` is for the jumps the code does not name. Every `JP (HL)`,
+`JP (IX)` and `JP (IY)` is written down with where it went and what ran just
+before it, then those targets are looked for side by side in memory, which finds
+the jump table with the entries nothing has jumped to yet. Those entries lead
+`coverage` to handlers nothing else mentions. Pointed at Jetpac without being
+told anything, it finds the 18 object handlers at `$6374`, ten of them seen.
+
+Both only know what they were watching for. A `PUSH HL : RET` used as a jump is
+not seen as one, since nothing about a `RET` says which it is. Unreached code is
+decoded, not run, so a stretch can run on into something that isn't code. And
+code that has since been overwritten still counts as having run: Jetpac's first
+four bytes ran as a bootstrap before its loader moved the program over them, so
+what's there now decodes as nonsense that `coverage` follows. Where a table ends
+is a guess, and a word beyond it may get listed.
+
 **Searching it.** `find_bytes`, `changed_since`.
 
 The variable hunt: `save_state`, lose a life, `changed_since` — the counter is

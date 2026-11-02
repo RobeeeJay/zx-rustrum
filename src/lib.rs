@@ -8,6 +8,7 @@ pub mod audio_out;
 pub mod autodoc;
 pub mod blocks;
 pub mod callgraph;
+pub mod coverage;
 pub mod crt;
 pub mod demo_rom;
 pub mod detect;

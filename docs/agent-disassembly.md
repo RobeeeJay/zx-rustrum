@@ -29,20 +29,19 @@ than a label and a comment.
 Code is what has run — the tracker marks every opcode fetch — so a level never
 reached, a death never died or a menu option never chosen stays DEFB.
 
-- **Code that can be reached but has not run.** Follow jumps, calls and jump
-  tables out from what has run, and mark what can be reached separately from
-  what has run and from data, so the export and the listing can tell the three
-  apart.
-- **Branches never taken.** A list of conditional jumps, calls and returns
-  where only one side has run, and a way to fork from a saved state with a
-  flag or a register forced so the other side can be explored.
-  `save_state` and `restore_state` are there already.
+- **Code that can be reached but has not run.** `coverage` follows jumps, calls
+  and jump tables out from what has run and lists it. The export and the listing
+  don't tell the three apart yet.
+- **Branches never taken.** `coverage` lists the conditionals that have gone one
+  way. What is missing is a way to fork from a saved state with a flag or a
+  register forced, so the other side can be explored. `save_state` and
+  `restore_state` are there already.
 - **Playing the game.** MCP has `press_keys`, `type_text` and `mouse`, and no
   joystick. An agent also wants "hold these inputs for this many frames" and a
   way to know when the picture has settled, so it can drive menus and play a
   level without guessing at timing.
-- **A coverage report.** How much of RAM has run, which routines, and which
-  regions nothing has touched at all.
+- **A coverage report.** `coverage` gives how much of a range has run and what
+  nothing has touched. It doesn't say which routines yet.
 
 ## 2. Where data comes from
 

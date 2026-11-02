@@ -820,6 +820,34 @@ pub fn tools() -> Json {
             )],
         ),
         tool(
+            "coverage",
+            "How far watching has got, and where to go next: what has run, what the code \
+             that has run could reach but has not, what has only been read, and which \
+             conditionals have only ever gone one way. Unreached stretches are the code a \
+             disassembly built from watching is missing, and a one-sided branch says what \
+             to make happen to reach it.",
+            [
+                ("from", address("lowest address (default $5B00, above the screen)")),
+                ("to", address("highest address (default $FFFF)")),
+                (
+                    "limit",
+                    prop("integer", "most stretches and branches to list (default 60)"),
+                ),
+            ],
+        ),
+        tool(
+            "indirect_jumps",
+            "Every JP (HL), JP (IX) and JP (IY) that has run: where each went, how often, \
+             and the instruction before it, which is the one to read when the jump is a \
+             one-byte trampoline. Then those targets found side by side in memory, which \
+             is a jump table, with the entries nothing has jumped to yet. The code names \
+             none of this, so it is how dispatch is found.",
+            [
+                ("from", address("lowest address to look for tables (default $5B00)")),
+                ("to", address("highest address to look for tables (default $FFFF)")),
+            ],
+        ),
+        tool(
             "load_symbols",
             "Read names for addresses out of a symbol file — a ROM disassembly turned into \
              one by tools/rom-symbols.py, or a game's by tools/skool-symbols.py — and build \

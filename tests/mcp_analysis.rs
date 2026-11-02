@@ -1178,3 +1178,207 @@ fn the_listing_does_not_swallow_code_that_starts_inside_a_row_of_data() {
         "the routine's first instruction is an instruction: {listing}"
     );
 }
+
+/// A dispatcher through a one-byte trampoline and a table of three handlers,
+/// the way a game does it: `type` at $9100 picks one, and the third is never
+/// picked. The first handler's branch always jumps over code nothing else
+/// reaches. The second's is never taken, though its target runs anyway, which
+/// is the case that looking at the target alone gets wrong.
+fn dispatcher(server: &mut Server) {
+    let spec = &mut server.session.spec;
+    let code: &[(u16, &[u8])] = &[
+        (0x8000, &[0x3A, 0x00, 0x91]),                   // loop: LD A,($9100)
+        (0x8003, &[0x87, 0x5F, 0x16, 0x00]),             // ADD A,A : LD E,A : LD D,0
+        (0x8007, &[0x21, 0x00, 0x92, 0x19]),             // LD HL,$9200 : ADD HL,DE
+        (0x800B, &[0x7E, 0x23, 0x66, 0x6F]),             // LD A,(HL) : INC HL : LD H,(HL) : LD L,A
+        (0x800F, &[0xC3, 0x20, 0x80]),                   // JP $8020
+        (0x8020, &[0xE9]),                               // JP (HL)
+        (0x8030, &[0xAF, 0x28, 0x03]),                   // handler 0: XOR A : JR Z,$8036
+        (0x8033, &[0x32, 0x03, 0x91]),                   // LD ($9103),A, never reached
+        (0x8036, &[0xC3, 0x00, 0x80]),                   // JP loop
+        (0x8040, &[0xAF, 0x20, 0xF3]),                   // handler 1: XOR A : JR NZ,$8036
+        (0x8043, &[0xC3, 0x00, 0x80]),                   // JP loop
+        (0x8050, &[0x32, 0x04, 0x91, 0xC3, 0x00, 0x80]), // handler 2, never picked
+    ];
+    for (at, bytes) in code {
+        for (i, b) in bytes.iter().enumerate() {
+            spec.bus.poke(at + i as u16, *b);
+        }
+    }
+    let table = [0x30, 0x80, 0x40, 0x80, 0x50, 0x80];
+    for (i, b) in table.iter().enumerate() {
+        spec.bus.poke(0x9200 + i as u16, *b);
+    }
+    spec.cpu.pc = 0x8000;
+}
+
+fn run_dispatcher(server: &mut Server) {
+    dispatcher(server);
+    call(server, "watch_routines", Json::obj([])).unwrap();
+    let run = |server: &mut Server| {
+        call(
+            server,
+            "run_tstates",
+            Json::obj([("tstates", Json::num(5_000))]),
+        )
+        .unwrap();
+    };
+    server.session.spec.bus.poke(0x9100, 0);
+    run(server);
+    server.session.spec.bus.poke(0x9100, 1);
+    run(server);
+}
+
+/// Coverage says what has run, what has not, and how each branch went as
+/// recorded: a target running from elsewhere does not make a branch taken.
+#[test]
+fn coverage_finds_the_code_not_reached_and_the_branches_one_way() {
+    let mut server = Server::new();
+    run_dispatcher(&mut server);
+    let args = Json::obj([("from", Json::str("$8000")), ("to", Json::str("$80FF"))]);
+    let said = call(&mut server, "coverage", args).unwrap();
+
+    assert!(
+        said.contains("$8033-$8035"),
+        "the far side of the branch that always jumps: {said}"
+    );
+    assert!(
+        said.contains("$8050-$8055"),
+        "the handler only the table leads to: {said}"
+    );
+    assert!(
+        said.contains("led to by $9204"),
+        "and the table's word is what leads there: {said}"
+    );
+    let line = |at: &str| {
+        said.lines()
+            .find(|l| l.trim_start().starts_with(at) && l.contains("JR"))
+            .unwrap_or_else(|| panic!("no line for {at}: {said}"))
+            .to_string()
+    };
+    assert!(line("$8031").contains("always taken"), "{said}");
+    assert!(
+        line("$8041").contains("never taken"),
+        "its target at $8036 runs, but not because of this branch: {said}"
+    );
+}
+
+/// The code does not name where a JP (HL) goes. What it did names the handlers,
+/// the instruction that got to the trampoline, and the table, including the
+/// entry nothing has jumped to.
+#[test]
+fn indirect_jumps_finds_the_handlers_and_the_table_behind_them() {
+    let mut server = Server::new();
+    run_dispatcher(&mut server);
+    let said = call(&mut server, "indirect_jumps", Json::obj([])).unwrap();
+
+    assert!(said.contains("$8020, 2 targets"), "{said}");
+    assert!(
+        said.contains("reached from $800F"),
+        "the trampoline's caller: {said}"
+    );
+    assert!(said.contains("-> $8030"), "{said}");
+    assert!(said.contains("-> $8040"), "{said}");
+    assert!(
+        said.contains("$9200  3 words, 2 jumped to so far"),
+        "the table: {said}"
+    );
+    assert!(
+        said.lines()
+            .any(|l| l.contains("[ 2] $8050") && l.contains("not jumped to yet")),
+        "with the handler never picked: {said}"
+    );
+}
+
+/// Nothing watched is said, rather than reported as nothing having run.
+#[test]
+fn coverage_says_when_nothing_has_been_watched() {
+    let mut server = Server::new();
+    let err = call(&mut server, "coverage", Json::obj([])).unwrap_err();
+    assert!(err.contains("watch_routines"), "{err}");
+    let err = call(&mut server, "indirect_jumps", Json::obj([])).unwrap_err();
+    assert!(err.contains("watch_routines"), "{err}");
+}
+
+/// A loader moving the program reads every byte of its code, and that must not
+/// make the code look like data: in Jetpac it made all 8K "read, never run", and
+/// coverage reported nothing left to reach.
+#[test]
+fn code_a_loader_has_moved_can_still_be_reached() {
+    let mut server = Server::new();
+    dispatcher(&mut server);
+    // LD HL,$8050 : LD DE,$A000 : LD BC,6 : LDIR : JP $8000, reading the handler
+    // nothing dispatches to.
+    let copier = [
+        0x21, 0x50, 0x80, 0x11, 0x00, 0xA0, 0x01, 0x06, 0x00, 0xED, 0xB0, 0xC3, 0x00, 0x80,
+    ];
+    for (i, b) in copier.iter().enumerate() {
+        server.session.spec.bus.poke(0x8100 + i as u16, *b);
+    }
+    server.session.spec.cpu.pc = 0x8100;
+    server.session.spec.bus.poke(0x9100, 0);
+    call(&mut server, "watch_routines", Json::obj([])).unwrap();
+    call(
+        &mut server,
+        "run_tstates",
+        Json::obj([("tstates", Json::num(5_000))]),
+    )
+    .unwrap();
+    server.session.spec.bus.poke(0x9100, 1);
+    call(
+        &mut server,
+        "run_tstates",
+        Json::obj([("tstates", Json::num(5_000))]),
+    )
+    .unwrap();
+    let args = Json::obj([("from", Json::str("$8000")), ("to", Json::str("$80FF"))]);
+    let said = call(&mut server, "coverage", args).unwrap();
+    assert!(
+        said.contains("$8050-$8055"),
+        "read by the copy, and still reachable through the table: {said}"
+    );
+}
+
+/// A table is two different targets side by side, near each other and for one
+/// jump. A repeated word is a row of a sprite, and a far-off word is not part of
+/// it: $5CB0 sat in front of Jetpac's table as the operand of the JP before it.
+#[test]
+fn a_table_is_not_a_repeated_word_or_a_word_from_far_away() {
+    let mut server = Server::new();
+    dispatcher(&mut server);
+    {
+        let bus = &mut server.session.spec.bus;
+        // The operand of something in front of the table, far from any handler.
+        bus.poke(0x91FE, 0xB0);
+        bus.poke(0x91FF, 0x5C);
+        // A handler's address twice over, somewhere else.
+        for (i, b) in [0x30, 0x80, 0x30, 0x80].iter().enumerate() {
+            bus.poke(0x9300 + i as u16, *b);
+        }
+        bus.poke(0x9304, 0xFF);
+        bus.poke(0x9305, 0xFF);
+    }
+    call(&mut server, "watch_routines", Json::obj([])).unwrap();
+    for handler in [0, 1] {
+        server.session.spec.bus.poke(0x9100, handler);
+        call(
+            &mut server,
+            "run_tstates",
+            Json::obj([("tstates", Json::num(5_000))]),
+        )
+        .unwrap();
+    }
+    let said = call(&mut server, "indirect_jumps", Json::obj([])).unwrap();
+    assert!(
+        said.contains("$9200  3 words"),
+        "starts at the real table: {said}"
+    );
+    assert!(
+        !said.contains("$91FE"),
+        "not at the operand before it: {said}"
+    );
+    assert!(
+        !said.contains("$9300"),
+        "and a repeated word is not one: {said}"
+    );
+}

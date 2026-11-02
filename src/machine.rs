@@ -2241,6 +2241,7 @@ impl Spectrum {
                     self.bus.peek_raw(pc0),
                     self.bus.peek_raw(pc0.wrapping_add(1)),
                 ];
+                self.bus.observer.flow.note(pc0, opcode, pc1);
                 self.bus
                     .observer
                     .on_instruction(pc0, sp0, pc1, sp1, registers, opcode, |a| {

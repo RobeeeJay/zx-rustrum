@@ -654,6 +654,15 @@ comparison on every write when it is `None`, which is why it is an `Option` and
 not a list. It is the answer to "what writes to this?", which is the question a
 debugger is for.
 
+**What a conditional did is recorded, not worked out.** `coverage` says a branch
+was never taken because `observe.flow` watched it not be, since "its target ran"
+is also true of a target something else went to. `indirect_jumps` writes down
+where each `JP (HL)` went, because the code cannot say, and finds the table by
+looking for those addresses side by side: per jump, since a ROM's targets and a
+game's together span memory and find a "table" in anything, and needing two
+different words, since a repeated one is a row of a sprite. Having been read does
+not make a byte data: a loader moving a program reads all of it.
+
 **The MCP server is the emulator without a window.** `src/mcp/` and the `mcp`
 binary expose the machine over JSON-RPC so a language model can drive it:
 loading, running, breakpoints and event watches, registers, memory,
