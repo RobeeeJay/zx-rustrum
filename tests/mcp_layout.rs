@@ -129,7 +129,7 @@ fn every_kind_of_row_stands_for_exactly_the_bytes_it_was_made_from() {
 // What a sprite looks like is the fastest way to know what it is: nobody reads
 // a run of hex and sees a fuel can.
 #[test]
-fn a_bitmap_is_listed_with_its_picture_beside_each_row() {
+fn a_bitmap_is_listed_with_its_picture_above_its_rows() {
     let mut server = Server::new();
     poke(&mut server, "$8000", &[0, 2, 2, 0xF0, 0x0F, 0x81, 0x18]);
     call(
@@ -160,13 +160,112 @@ fn a_bitmap_is_listed_with_its_picture_beside_each_row() {
         text.contains("$8000  DEFB $00,$02,$02\n"),
         "the header has no picture: {text}"
     );
+    // Above the rows and at two characters a pixel, since a character is about
+    // twice as tall as it is wide and one a pixel squashes a sprite to a sliver.
+    let picture = "; ########                ########\n\
+                   ; ##            ##      ####\n";
     assert!(
-        text.contains("$8003  DEFB $F0,$0F  ; ####........####"),
-        "first row: {text}"
+        text.contains(&format!("{picture}$8000  DEFB")),
+        "the picture goes above the rows: {text}"
     );
+    assert!(text.contains("$8003  DEFB $F0,$0F\n"), "first row: {text}");
+    assert!(text.contains("$8005  DEFB $81,$18\n"), "second row: {text}");
+}
+
+// Comparing a byte with its pixels is sometimes the job, so that view is kept.
+#[test]
+fn a_listing_can_ask_for_the_pixels_beside_each_row_instead() {
+    let mut server = Server::new();
+    poke(&mut server, "$8000", &[0xF0, 0x0F]);
+    call(
+        &mut server,
+        "set_data",
+        Json::obj([
+            ("address", Json::str("$8000")),
+            ("kind", Json::str("bitmap")),
+            ("width", Json::num(1)),
+            ("rows", Json::num(2)),
+            ("bottom_up", Json::Bool(true)),
+        ]),
+    )
+    .unwrap();
+    let path = std::env::temp_dir().join(format!("zxrs-rowview-{}.lst", std::process::id()));
+    call(
+        &mut server,
+        "export_listing",
+        Json::obj([
+            ("path", Json::str(path.display().to_string())),
+            ("from", Json::str("$8000")),
+            ("to", Json::str("$8001")),
+            ("bitmap_rows", Json::Bool(true)),
+        ]),
+    )
+    .unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
     assert!(
-        text.contains("$8005  DEFB $81,$18  ; #......#...##..."),
-        "second row: {text}"
+        text.contains("$8000  DEFB $F0  ; ####.... | ....####"),
+        "{text}"
+    );
+    assert!(!text.contains("; ########"), "no block as well: {text}");
+}
+
+// Jetpac stores FUEL bottom row first. The block is the point of the exercise, so
+// it has to come out the right way up without the rows having moved.
+#[test]
+fn a_picture_drawn_upwards_comes_out_the_right_way_up_above_rows_in_memory_order() {
+    let mut server = Server::new();
+    poke(&mut server, "$8000", &[0xF0, 0x0F]);
+    call(
+        &mut server,
+        "set_data",
+        Json::obj([
+            ("address", Json::str("$8000")),
+            ("kind", Json::str("bitmap")),
+            ("width", Json::num(1)),
+            ("rows", Json::num(2)),
+            ("bottom_up", Json::Bool(true)),
+        ]),
+    )
+    .unwrap();
+    let text = listing(&mut server, "$8000", "$8001", "upwards");
+    assert!(
+        text.contains(";         ########\n; ########\n$8000  DEFB $F0\n$8001  DEFB $0F\n"),
+        "{text}"
+    );
+}
+
+// An assembler has to read past the picture, so all of it must be comment, and it
+// must not get in the way of the bytes.
+#[test]
+fn the_assembly_export_has_the_picture_as_comments_above_the_same_bytes() {
+    let mut server = Server::new();
+    poke(&mut server, "$8000", &[0xF0, 0x0F]);
+    call(
+        &mut server,
+        "set_data",
+        Json::obj([
+            ("address", Json::str("$8000")),
+            ("kind", Json::str("bitmap")),
+            ("width", Json::num(1)),
+            ("rows", Json::num(2)),
+        ]),
+    )
+    .unwrap();
+    let path = std::env::temp_dir().join(format!("zxrs-picture-{}.asm", std::process::id()));
+    call(
+        &mut server,
+        "export_asm",
+        Json::obj([("path", Json::str(path.display().to_string()))]),
+    )
+    .unwrap();
+    let asm = std::fs::read_to_string(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(
+        asm.contains(
+            "        ; ########\n        ;         ########\n        DEFB $F0\n        DEFB $0F\n"
+        ),
+        "{asm:.900}"
     );
 }
 

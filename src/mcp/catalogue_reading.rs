@@ -96,7 +96,7 @@ pub fn tools() -> Vec<Json> {
             "set_data",
             "Say what a stretch of memory holds, so the listing and the assembly export \
              show it as that: words as DEFW with names for the addresses, text as DEFM, \
-             a bitmap as DEFB rows with the picture beside each in # and dots. It is a \
+             a bitmap as DEFB rows with the picture above them. It is a \
              claim you are making: nothing checks it, and the bytes come out the same \
              whatever you say. kind \"bytes\" takes a claim back.",
             [
@@ -123,8 +123,8 @@ pub fn tools() -> Vec<Json> {
                     prop(
                         "boolean",
                         "the first row in memory is the bottom of the picture, for a program \
-                         that draws up the screen. Each row then shows its own pixels, then \
-                         the picture the right way up beside them.",
+                         that draws up the screen. The picture is then turned the right way \
+                         up, and the rows stay in memory order.",
                     ),
                 ),
             ],

@@ -966,6 +966,14 @@ fn own_tools() -> Vec<Json> {
                 ("from", address("lowest address (default $4000)")),
                 ("to", address("highest address (default $FFFF)")),
                 (
+                    "bitmap_rows",
+                    prop(
+                        "boolean",
+                        "show a bitmap's pixels beside each of its rows, rather than the \
+                         picture above them (default false)",
+                    ),
+                ),
+                (
                     "facts",
                     prop(
                         "boolean",

@@ -317,10 +317,13 @@ pub fn write(src: &Source) -> Exported {
     while at <= 0xFFFF {
         let a = at as u16;
         if let Some(typed) = src.notes.layout().data.get(&a) {
+            // The picture goes above a bitmap, so its rows have nothing beside them.
+            let shown = crate::layout::picture(typed, &peek).is_empty();
             for row in crate::layout::rows(typed, &peek) {
+                let beside = if shown { row.beside } else { String::new() };
                 lines.push(Line {
                     at: row.at,
-                    body: Body::Typed(row.directive, row.len, row.beside),
+                    body: Body::Typed(row.directive, row.len, beside),
                     inner: Vec::new(),
                 });
                 at += row.len as u32;
@@ -464,6 +467,12 @@ pub fn write(src: &Source) -> Exported {
         } else {
             ""
         };
+        if let Some(typed) = src.notes.layout().data.get(&line.at) {
+            for row in crate::layout::picture(typed, &peek) {
+                out.push_str(format!("        ; {row}").trim_end());
+                out.push('\n');
+            }
+        }
         let mut beside: Vec<String> = Vec::new();
         if comment.contains('\n') {
             for (i, part) in comment.lines().enumerate() {

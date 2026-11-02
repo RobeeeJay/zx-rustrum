@@ -198,18 +198,25 @@ you what's there to read, not what happens.
 A listing of hex tells you nothing about a sprite. `set_data` says what a stretch
 holds, and the listing and `export_asm` then show it as that: words as `DEFW` with
 names for the addresses, text as `DEFM`, and a bitmap as rows of `DEFB` with the
-picture beside each one:
+picture above them:
 
 ```text
-$7E1C  DEFB $18,$18  ; ...##......##...
-$7E1E  DEFB $FF,$FF  ; ################
+;       ####            ####
+; ################################
+$8000  DEFB $00,$02,$02
+$8003  DEFB $18,$18
+$8005  DEFB $FF,$FF
 ```
 
-The left-hand pixel is the byte's top bit, the same way up as the display file.
-Width, rows and how many bytes of header come first are yours to give, because a
-game's sprite format is its own. A game that draws up the screen keeps its sprites
-upside down, so `bottom_up` shows the row's own pixels and then, after a `|`, the
-picture the right way up. You are making a claim and nothing checks it,
+It's drawn at two characters a pixel, because a character is about twice as tall as
+it's wide and one a pixel squashes a sprite to a sliver. Width, rows and how many
+bytes of header come first are yours to give, because a game's sprite format is its
+own. A game that draws up the screen keeps its sprites upside down, and `bottom_up`
+turns the picture the right way up while the rows stay in memory order. To compare
+a byte with its pixels, `bitmap_rows` on `export_listing` puts each row's pixels
+beside it instead.
+
+You are making a claim and nothing checks it,
 but it can't damage anything: however a stretch is shown, its rows stand for the
 same bytes, so the export still assembles back into the program.
 

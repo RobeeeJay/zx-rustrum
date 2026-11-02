@@ -293,6 +293,37 @@ pub fn pixels(bytes: &[u8]) -> String {
         .collect()
 }
 
+/// A bitmap as a picture, a line a row, the right way up: two characters a pixel,
+/// because a character is about twice as tall as it is wide and one a pixel squashes
+/// a sprite to a sliver. Empty for anything that isn't a bitmap.
+pub fn picture(typed: &Typed, peek: &dyn Fn(u16) -> u8) -> Vec<String> {
+    let Kind::Bitmap {
+        width,
+        rows,
+        header,
+        bottom_up,
+    } = typed.kind
+    else {
+        return Vec::new();
+    };
+    let width = width.max(1) as u16;
+    let mut lines: Vec<String> = (0..rows)
+        .map(|row| {
+            let start = typed.at.wrapping_add(header as u16 + row * width);
+            let bytes: Vec<u8> = (0..width).map(|i| peek(start.wrapping_add(i))).collect();
+            let line: String = pixels(&bytes)
+                .chars()
+                .map(|c| if c == '#' { "##" } else { "  " })
+                .collect();
+            line.trim_end().to_string()
+        })
+        .collect();
+    if bottom_up {
+        lines.reverse();
+    }
+    lines
+}
+
 /// A character an assembler takes inside a quoted string without any fuss.
 fn plain_character(b: u8) -> bool {
     // A dollar too, since addresses in a line are turned into names.

@@ -35,6 +35,7 @@ pub fn export_listing(session: &mut Session, args: &Json) -> Result<String, Stri
             .unwrap_or_else(|| "a machine with nothing loaded".into())
     );
     let facts = flag(args, "facts", true);
+    let bitmap_rows = flag(args, "bitmap_rows", false);
     out.push_str(&format!(
         "; What is marked \"run\" was executed while the machine was watched over {watched} \
          frames.\n; Anything else may be data, or code that has not run yet.\n"
@@ -64,9 +65,20 @@ pub fn export_listing(session: &mut Session, args: &Json) -> Result<String, Stri
         if let Some(typed) = session.notes.layout().data.get(&at).copied() {
             let peek = |a: u16| session.spec.bus.peek_raw(a);
             let rows = crate::layout::rows(&typed, &peek);
-            for row in &rows {
+            let picture = if bitmap_rows {
+                Vec::new()
+            } else {
+                crate::layout::picture(&typed, &peek)
+            };
+            for (i, row) in rows.iter().enumerate() {
                 note_above(session, row.at, &used_by, &mut out);
-                let beside = if row.beside.is_empty() {
+                if i == 0 {
+                    for line in &picture {
+                        out.push_str(format!("; {line}").trim_end());
+                        out.push('\n');
+                    }
+                }
+                let beside = if row.beside.is_empty() || !picture.is_empty() {
                     String::new()
                 } else {
                     format!("  ; {}", row.beside)
