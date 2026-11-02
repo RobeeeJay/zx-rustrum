@@ -13,6 +13,7 @@ pub mod deck;
 pub mod disk;
 pub mod input;
 pub mod json;
+pub mod listing;
 pub mod looking;
 pub mod memory;
 pub mod microdrive;

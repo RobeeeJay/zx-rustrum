@@ -275,7 +275,7 @@ impl Session {
             "set_comment" => crate::mcp::analysis::set_comment(self, args),
             "comments" => crate::mcp::analysis::comments(self, args),
             "save_comments" => crate::mcp::analysis::save_comments(self, args),
-            "export_listing" => crate::mcp::analysis::export_listing(self, args),
+            "export_listing" => crate::mcp::listing::export_listing(self, args),
             "export_asm" => crate::mcp::analysis::export_asm(self, args),
             other => Err(format!("no tool called {other:?}; try tools/list")),
         }
