@@ -35,7 +35,8 @@ machine never calls the ROM's loader at `$0556`, the tool fails rather than
 pretending. That only says it started reading, though, and a game can still fail
 after that. Jetpac does on a 128K: from the menu, its stub has its `LDIR` at `$5B89`,
 on a byte the ROM decrements every other frame, so it becomes a `CALL` and resets the
-machine. From 48 BASIC, with paging locked, it runs. So when PC ends up in the ROM
+machine. From 48 BASIC, with paging locked, it runs, so `basic48: true` goes there
+from the menu first and fails if the paging doesn't lock. When PC ends up in the ROM
 the tool says so, and it's worth looking at the screen.
 
 **The map, before disassembling.** `memory_activity`, `tape_blocks`, `loader`.

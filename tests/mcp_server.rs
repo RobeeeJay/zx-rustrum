@@ -1032,6 +1032,114 @@ fn autoload_runs_a_tape_on_every_model_of_spectrum() {
     let _ = std::fs::remove_file(&path);
 }
 
+// Plenty of 48K games can't be loaded from a 128K's menu, because 128 BASIC keeps
+// using memory they load into. 48 BASIC is how they were run on the machine, and
+// the mark of having got there is the paging being locked.
+#[test]
+fn a_tape_can_be_started_from_48_basic_on_the_machines_with_a_menu() {
+    let path = std::env::temp_dir().join(format!("zxrs-basic48-{}.tap", std::process::id()));
+    std::fs::write(&path, poking_tape()).unwrap();
+    for (model, rom) in [
+        ("128k", "roms/128.rom"),
+        ("+2a", "roms/plus3.rom"),
+        ("+3", "roms/plus3.rom"),
+    ] {
+        if std::fs::read(rom).is_err() {
+            eprintln!("need {rom}; skipping {model}");
+            continue;
+        }
+        let mut server = Server::new();
+        call(
+            &mut server,
+            "set_machine",
+            Json::obj([("model", Json::str(model))]),
+        )
+        .unwrap();
+        let said = call(
+            &mut server,
+            "load_tape",
+            Json::obj([
+                ("path", Json::str(path.display().to_string())),
+                ("basic48", Json::Bool(true)),
+            ]),
+        )
+        .unwrap_or_else(|e| panic!("{model}: {e}"));
+        let bus = &server.session.spec.bus;
+        assert!(bus.paging_locked, "{model}: not in 48 BASIC. Told: {said}");
+        assert_eq!(
+            bus.peek_raw(40000),
+            42,
+            "{model}: did not run. Told: {said}"
+        );
+    }
+    let _ = std::fs::remove_file(&path);
+}
+
+// The case it exists for. From the 128K's Tape Loader this game loads and resets
+// the machine, which wipes its stub from $5B80.
+#[test]
+fn jetpac_survives_on_a_128k_from_48_basic() {
+    let tape = "tapes/Jetpac (1983)(Ultimate Play The Game)[16K].tzx";
+    if std::fs::read("roms/128.rom").is_err() || std::fs::read(tape).is_err() {
+        eprintln!("need roms/128.rom and {tape}; skipping");
+        return;
+    }
+    let load = |basic48: bool| {
+        let mut server = Server::new();
+        call(
+            &mut server,
+            "set_machine",
+            Json::obj([("model", Json::str("128k"))]),
+        )
+        .unwrap();
+        let said = call(
+            &mut server,
+            "load_tape",
+            Json::obj([("path", Json::str(tape)), ("basic48", Json::Bool(basic48))]),
+        )
+        .unwrap();
+        (server, said)
+    };
+    let (crashed, _) = load(false);
+    assert_ne!(
+        crashed.session.spec.bus.peek_raw(0x5B80),
+        0x21,
+        "it used to crash from the menu, and if it doesn't any more this test proves nothing"
+    );
+    let (server, said) = load(true);
+    let spec = &server.session.spec;
+    assert_eq!(spec.bus.peek_raw(0x5B80), 0x21, "the stub is gone: {said}");
+    assert_eq!(
+        spec.bus.peek_raw(0x5C79),
+        0x83,
+        "FRAMES as the tape left it, which a reset would have cleared: {said}"
+    );
+}
+
+// On a 48K there's no menu to go through, and asking is not a mistake worth
+// stopping for: it's already 48 BASIC.
+#[test]
+fn asking_for_48_basic_on_a_48k_changes_nothing() {
+    if std::fs::read("roms/48.rom").is_err() {
+        eprintln!("need roms/48.rom; skipping");
+        return;
+    }
+    let path = std::env::temp_dir().join(format!("zxrs-basic48k-{}.tap", std::process::id()));
+    std::fs::write(&path, poking_tape()).unwrap();
+    let mut server = Server::new();
+    call(
+        &mut server,
+        "load_tape",
+        Json::obj([
+            ("path", Json::str(path.display().to_string())),
+            ("basic48", Json::Bool(true)),
+        ]),
+    )
+    .unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert_eq!(server.session.spec.bus.peek_raw(40000), 42);
+}
+
 // Reading the tape isn't the same as the game running, and on a machine a game
 // doesn't suit it ends up back at a prompt. Only the PC can say so.
 #[test]

@@ -107,6 +107,15 @@ fn own_tools() -> Vec<Json> {
                     "autoload",
                     prop("boolean", "type LOAD \"\" and run it (default true)"),
                 ),
+                (
+                    "basic48",
+                    prop(
+                        "boolean",
+                        "on a 128K, +2A or +3, go to 48 BASIC from the menu first, which \
+                         locks the paging. Many 48K games need it: 128 BASIC keeps using \
+                         memory they load into, and they crash (default false)",
+                    ),
+                ),
             ],
             &["path"],
         ),

@@ -458,7 +458,7 @@ impl Session {
         self.loaded = Some(format!("tape {}", path.display()));
 
         if flag(args, "autoload", true) {
-            let report = self.autoload()?;
+            let report = self.autoload(flag(args, "basic48", false))?;
             return Ok(format!(
                 "Loaded {} ({blocks} blocks), and the machine read it. {report}",
                 path.display()
@@ -474,7 +474,7 @@ impl Session {
     /// stops, with the ROM's loader handed over where it can be — a tape plays
     /// at 1,500 baud however fast the machine is run, and waiting for it in real
     /// time is forty minutes of nothing.
-    fn autoload(&mut self) -> Result<String, String> {
+    fn autoload(&mut self, basic48: bool) -> Result<String, String> {
         self.spec.reset();
         self.spec.bus.tape_flash = true;
         self.spec.bus.tape_boost = true;
@@ -484,6 +484,28 @@ impl Session {
         let kept = std::mem::replace(&mut self.spec.breakpoints, vec![LD_BYTES]);
         let mut reading = false;
         self.frames_watching(120, &mut reading);
+        if basic48 && self.spec.bus.model != Model::Spectrum48 {
+            // 48 BASIC is the fourth line of the menu on all of them: cursor
+            // down is caps shift and 6. It tests all of its memory again before
+            // it will take anything, and locks the paging as it comes up.
+            let down: &[(usize, u8)] = &[(0, 0), (4, 4)];
+            // A +3 looks for its drive before the menu will take keys: it
+            // ignored them at frame 120 and took them from 150 to 600.
+            self.frames_watching(80, &mut reading);
+            for keys in [down, down, down, &[(6, 0)]] {
+                self.press_watching(keys, &mut reading);
+            }
+            self.frames_watching(200, &mut reading);
+            if !self.spec.bus.paging_locked {
+                self.spec.breakpoints = kept;
+                return Err(format!(
+                    "the {} did not go to 48 BASIC from its menu: the paging is not locked, \
+                     and PC is ${:04X}. The tape is in the deck and has not moved.",
+                    self.spec.bus.model.name(),
+                    self.spec.cpu.pc
+                ));
+            }
+        }
         // J, then symbol-shift P twice, then ENTER: LOAD "" as the 48K ROM wants
         // it typed. The menu on the others ignores the letters and takes the
         // ENTER as its first line, which is the tape loader.
@@ -493,14 +515,7 @@ impl Session {
             &[(7, 1), (5, 0)][..],
             &[(6, 0)][..],
         ] {
-            for (row, bit) in keys {
-                self.spec.bus.keys[*row] &= !(1 << bit);
-            }
-            self.frames_watching(4, &mut reading);
-            for (row, bit) in keys {
-                self.spec.bus.keys[*row] |= 1 << bit;
-            }
-            self.frames_watching(4, &mut reading);
+            self.press_watching(keys, &mut reading);
         }
         // A +3 tries its disk first, and the drive takes seconds to say no.
         for _ in 0..150 {
@@ -555,6 +570,18 @@ impl Session {
         for (before, now) in self.ran_before.iter_mut().zip(executed.iter()) {
             *before |= *now;
         }
+    }
+
+    /// Hold these keys long enough for a ROM to believe them, and let go.
+    fn press_watching(&mut self, keys: &[(usize, u8)], reading: &mut bool) {
+        for (row, bit) in keys {
+            self.spec.bus.keys[*row] &= !(1 << bit);
+        }
+        self.frames_watching(4, reading);
+        for (row, bit) in keys {
+            self.spec.bus.keys[*row] |= 1 << bit;
+        }
+        self.frames_watching(4, reading);
     }
 
     /// Run this many frames, noting if the breakpoint on LD-BYTES is reached.
