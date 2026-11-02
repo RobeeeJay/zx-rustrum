@@ -270,6 +270,12 @@ pub struct Observer {
     pub port_sites: BTreeMap<u16, Site>,
     /// What each conditional and indirect jump was seen to do.
     pub flow: crate::coverage::Flow,
+    /// Writes that changed something: to code that had run, and to whatever
+    /// has been asked to be watched.
+    pub changes: crate::changes::Changes,
+    /// What has run only because a branch was forced by force_branch, which
+    /// the machine may never do by itself.
+    pub forced: Vec<(u16, u16)>,
     /// The address of the instruction being executed, so a port access can be
     /// attributed to the instruction making it. Set by the machine before each
     /// instruction; a port is read part-way through one, which is before
@@ -618,6 +624,48 @@ impl Observer {
             Some((low, high)) => (low.min(addr), high.max(addr)),
             None => (addr, addr),
         });
+    }
+
+    /// A write is about to replace `old` with `value`.
+    pub fn on_change(&mut self, addr: u16, old: u8, value: u8) {
+        if old == value {
+            return;
+        }
+        let change = crate::changes::Change {
+            addr,
+            frame: self.frames,
+            t: self.frame_t,
+            pc: self.executing,
+            old,
+            new: value,
+        };
+        let was_code = bit(&self.executed, addr);
+        self.changes.note(change, was_code);
+    }
+
+    /// What ran on a machine forked from this one, taken as run and written
+    /// down as having needed forcing. Everything else the fork measured is
+    /// left behind, so it does not get counted as what this program does.
+    pub fn absorb_forced(&mut self, fork: &Observer) -> Vec<(u16, u16)> {
+        let mut new: Vec<(u16, u16)> = Vec::new();
+        for addr in 0..=0xFFFFu16 {
+            if bit(&fork.executed, addr) && !bit(&self.executed, addr) {
+                set(&mut self.executed, addr);
+                match new.last_mut() {
+                    Some((_, high)) if *high as u32 + 1 == addr as u32 => *high = addr,
+                    _ => new.push((addr, addr)),
+                }
+            }
+        }
+        self.forced.extend(new.iter().copied());
+        new
+    }
+
+    /// Whether this byte has run only under a forced branch.
+    pub fn was_forced(&self, addr: u16) -> bool {
+        self.forced
+            .iter()
+            .any(|(low, high)| addr >= *low && addr <= *high)
     }
 
     /// A port was read or written by whatever routine is running.

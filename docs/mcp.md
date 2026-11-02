@@ -137,6 +137,36 @@ four bytes ran as a bootstrap before its loader moved the program over them, so
 what's there now decodes as nonsense that `coverage` follows. Where a table ends
 is a guess, and a word beyond it may get listed.
 
+**What it does to itself.** `self_modifying`, `watch_value`, `value_log`.
+
+A listing shows one moment's bytes, and on a program that patches its own code,
+that moment isn't always the truth. `self_modifying` lists what has rewritten code
+that had already run: where, how many times, by which instruction and with which
+values. A couple of values is a switch being thrown; one instruction and thousands
+of bytes is a loader moving a block over its own start. Code written before it
+first ran isn't counted, so unpacking doesn't bury the real ones, and nor is a
+write of the value already there.
+
+`watch_value` logs every change to a byte or a few, and `value_log` says which
+instructions made them, how many each, and then the changes in order with the frame
+and T-state. That's how you find out what takes a life without stopping the machine
+at each write. The latest 4,096 changes are kept per watch, and it tells you how
+many it let go.
+
+**The other side of a branch.** `force_branch`.
+
+`coverage` says which conditionals have only gone one way. `force_branch` makes one
+go the other way: it runs until the machine reaches it, turns over the flag it
+tests (or sets `B`, for `DJNZ`), runs on, and tells you what code that reached.
+
+This happens on a copy, so the real machine comes back exactly as it was, and of
+everything the copy did only the record of which bytes ran is kept. Those bytes
+show as code in the listing and are marked as forced, and `coverage` counts them
+separately and goes on calling the branch one-sided. That matters. Only one flag was
+changed, so what follows may be something the program could never do: the registers
+are whatever they were, not whatever the other route would have made them. It tells
+you what's there to read, not what happens.
+
 **What the data is.** `set_data`, `define_struct`, `struct_array`, `bind_struct`.
 
 A listing of hex tells you nothing about a sprite. `set_data` says what a stretch

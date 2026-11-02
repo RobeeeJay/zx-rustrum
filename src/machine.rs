@@ -1477,6 +1477,12 @@ impl Bus for SpectrumBus {
         }
         let phys = self.phys_index(addr);
         self.tracker.on_write(phys, addr);
+        // Only RAM can change, and a write to ROM is not a change. A +3 with
+        // its all-RAM paging is the one machine this misses below $4000.
+        if self.observer.enabled && addr >= 0x4000 {
+            let old = self.peek_raw(addr);
+            self.observer.on_change(addr, old, value);
+        }
         self.observer.on_write(addr, value);
         if self.undo.is_some() {
             // What was there before, so it can be put back. Read before the

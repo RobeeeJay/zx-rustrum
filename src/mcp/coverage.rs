@@ -2,6 +2,7 @@
 
 use crate::coverage::report;
 use crate::disasm::disasm;
+use crate::machine::{Stop, FRAME_T};
 use crate::mcp::json::Json;
 use crate::mcp::tools::{addr, count, Session};
 
@@ -61,6 +62,17 @@ pub fn coverage(session: &mut Session, args: &Json) -> Result<String, String> {
         r.untouched,
         share(r.untouched),
     );
+    let forced: u32 = observer
+        .forced
+        .iter()
+        .filter(|(low, high)| *high >= from && *low <= to)
+        .map(|(low, high)| *high.min(&to) as u32 - *low.max(&from) as u32 + 1)
+        .sum();
+    if forced > 0 {
+        out.push_str(&format!(
+            "  ({forced} of what has run ran only because a branch was forced)\n"
+        ));
+    }
     out.push_str(&format!(
         "\nCode not reached yet: {} stretches, widest first. Decoded rather than \
          run, so a stretch may run on into something that is not code.\n",
@@ -157,4 +169,114 @@ pub fn indirect_jumps(session: &mut Session, args: &Json) -> Result<String, Stri
         }
     }
     Ok(out)
+}
+
+pub fn force_branch(session: &mut Session, args: &Json) -> Result<String, String> {
+    let at = addr(args, "address")?;
+    if !session.spec.bus.observer.enabled {
+        return Err("force_branch keeps a record of what ran: call watch_routines first".into());
+    }
+    let opcode = session.spec.bus.peek_raw(at);
+    let text = disasm(&|a| session.spec.bus.peek_raw(a), at).text;
+    if !crate::coverage::is_conditional(opcode) {
+        return Err(format!("${at:04X} is {text}, which has nothing to force"));
+    }
+    let seen = session
+        .spec
+        .bus
+        .observer
+        .flow
+        .conditionals
+        .get(&at)
+        .copied()
+        .unwrap_or_default();
+    let take = match args.get("side").and_then(|s| s.as_str()) {
+        Some("taken") => true,
+        Some("not_taken") => false,
+        Some(other) => return Err(format!("side {other:?}: it should be taken or not_taken")),
+        None if seen.taken > 0 && seen.not_taken > 0 => {
+            return Err(format!(
+                "${at:04X} {text} has gone both ways already: say which side with side"
+            ))
+        }
+        None => seen.taken == 0,
+    };
+    let reach = count(args, "reach_frames", 500)?;
+    let frames = count(args, "frames", 100)?;
+
+    // The fork is what runs and what is thrown away, so the real machine keeps
+    // its hold on the sound device and comes back exactly as it was.
+    let mut fork = session.spec.clone();
+    fork.bus.audio.detach();
+    let original = std::mem::replace(&mut session.spec, fork);
+    let result = run_forced(session, args, at, opcode, take, reach, frames);
+    let fork = std::mem::replace(&mut session.spec, original);
+    let (pc, sp) = result?;
+
+    let new = session.spec.bus.observer.absorb_forced(&fork.bus.observer);
+    let side = if take { "taken" } else { "not taken" };
+    let mut out = format!(
+        "Forced ${at:04X} {text} {side}, then ran {frames} frames; it ended at PC ${pc:04X}, SP \
+         ${sp:04X}. The machine is back as it was.\n"
+    );
+    if new.is_empty() {
+        out.push_str("Nothing ran that had not run already.\n");
+        return Ok(out);
+    }
+    let bytes: u32 = new.iter().map(|(l, h)| *h as u32 - *l as u32 + 1).sum();
+    out.push_str(&format!(
+        "{bytes} bytes ran that had not, marked as forced. Only the one flag was changed, so \
+         the program may not be able to get here like this by itself:\n"
+    ));
+    for (low, high) in &new {
+        out.push_str(&format!(
+            "  ${low:04X}-${high:04X}  {}\n",
+            named(session, *low)
+        ));
+    }
+    Ok(out)
+}
+
+fn run_forced(
+    session: &mut Session,
+    args: &Json,
+    at: u16,
+    opcode: u8,
+    take: bool,
+    reach: u32,
+    frames: u32,
+) -> Result<(u16, u16), String> {
+    if let Some(state) = args.get("state").and_then(|s| s.as_str()) {
+        let data = session
+            .states
+            .get(state)
+            .ok_or_else(|| format!("no state called {state:?}"))?
+            .clone();
+        crate::snapshot::load_sna(&mut session.spec, &data)?;
+    }
+    if session.spec.cpu.pc != at {
+        match crate::mcp::control::run_to(session, &[at], reach)? {
+            Stop::Breakpoint(pc) if pc == at => {}
+            other => {
+                return Err(format!(
+                    "the machine did not get to ${at:04X} in {reach} frames ({other:?}); \
+                     nothing was forced. Try from a saved state nearer to it."
+                ))
+            }
+        }
+    }
+    match crate::coverage::condition(opcode) {
+        Some((flag, wanted)) => {
+            let set = wanted == take;
+            let cpu = &mut session.spec.cpu;
+            cpu.f = if set { cpu.f | flag } else { cpu.f & !flag };
+        }
+        // DJNZ decrements first: 1 falls through, and anything else jumps.
+        None => session.spec.cpu.b = if take { 2 } else { 1 },
+    }
+    session.spec.breakpoints.clear();
+    for _ in 0..frames {
+        session.spec.run(FRAME_T);
+    }
+    Ok((session.spec.cpu.pc, session.spec.cpu.sp))
 }

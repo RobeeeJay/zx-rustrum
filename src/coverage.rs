@@ -60,6 +60,40 @@ fn conditional_length(opcode: u8) -> Option<u16> {
     }
 }
 
+/// Whether an opcode is a conditional jump, call or return, or a DJNZ.
+pub fn is_conditional(opcode: u8) -> bool {
+    conditional_length(opcode).is_some()
+}
+
+/// Which flag a conditional tests and whether it wants it set, from the opcode.
+/// None for DJNZ, which tests B and not a flag.
+pub fn condition(opcode: u8) -> Option<(u8, bool)> {
+    const Z: u8 = 0x40;
+    const C: u8 = 0x01;
+    const PV: u8 = 0x04;
+    const S: u8 = 0x80;
+    if opcode == 0x10 {
+        return None;
+    }
+    // JR cc has its two conditions in bits 3-4, four along from the others.
+    let index = (opcode >> 3) & 7;
+    let index = if opcode & 0xE7 == 0x20 {
+        index - 4
+    } else {
+        index
+    };
+    Some(match index {
+        0 => (Z, false),
+        1 => (Z, true),
+        2 => (C, false),
+        3 => (C, true),
+        4 => (PV, false),
+        5 => (PV, true),
+        6 => (S, false),
+        _ => (S, true),
+    })
+}
+
 impl Flow {
     /// One instruction has run, from `pc` to `next`.
     pub fn note(&mut self, pc: u16, opcode: [u8; 2], next: u16) {

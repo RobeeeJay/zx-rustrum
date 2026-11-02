@@ -33,9 +33,9 @@ reached, a death never died or a menu option never chosen stays DEFB.
   and jump tables out from what has run and lists it. The export and the listing
   don't tell the three apart yet.
 - **Branches never taken.** `coverage` lists the conditionals that have gone one
-  way. What is missing is a way to fork from a saved state with a flag or a
-  register forced, so the other side can be explored. `save_state` and
-  `restore_state` are there already.
+  way and `force_branch` runs the other side on a fork, changing only the flag.
+  Forcing it with the registers the other route would have left isn't done, so
+  what it runs may not be what the program would do.
 - **Playing the game.** MCP has `press_keys`, `type_text` and `mouse`, and no
   joystick. An agent also wants "hold these inputs for this many frames" and a
   way to know when the picture has settled, so it can drive menus and play a
@@ -49,10 +49,9 @@ reached, a death never died or a menu option never chosen stays DEFB.
   wrote it, when, and where the bytes it wrote were read from. That is most of
   "how sprites are drawn". The Graphics window's Find does the last part by
   searching, but it is not an MCP tool yet.
-- **Watching a value.** A watch on an address with a condition on its value,
-  logging PC, frame, and old and new value. `docs/missing.md` already lists
-  conditional breakpoints as missing. It is how lives, score and coordinates
-  are found.
+- **Watching a value.** `watch_value` logs PC, frame, and old and new value for
+  an address. Stopping when it reaches a value isn't there: `docs/missing.md`
+  lists conditional breakpoints as missing.
 - **What an input changes.** Press left and say which bytes changed and which
   routine changed them. `changed_since` does half of this, without tying the
   change to the input or to the code.
@@ -80,9 +79,10 @@ reached, a death never died or a menu option never chosen stays DEFB.
   finds any of this: it has to be said by somebody who has looked.
 - **Detectors** for jump tables, strings (in the game's own font as well as
   ASCII) and sprite sheets.
-- **Unpacking and self-modifying code.** Flag writes into code that has run,
-  and a routine copying or decrypting a block that later runs. Many games
-  unpack themselves after loading; `loader` knows about tape loaders only.
+- **Unpacking and self-modifying code.** `self_modifying` flags writes into code
+  that has run. A routine copying or decrypting a block that later runs is still
+  not picked out, and many games unpack themselves after loading; `loader` knows
+  about tape loaders only.
 
 ## 5. Keeping what has been worked out
 

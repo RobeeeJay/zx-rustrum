@@ -8,6 +8,7 @@ pub mod activity;
 pub mod analysis;
 pub mod catalogue;
 pub mod catalogue_reading;
+pub mod changes;
 pub mod control;
 pub mod coverage;
 pub mod deck;

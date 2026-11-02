@@ -1,11 +1,85 @@
 //! The tools for saying what a program's data is and watching what it does to
 //! itself. Apart from the main list only because that had grown past a file.
 
-use crate::mcp::catalogue::{address, prop, schema_tool};
+use crate::mcp::catalogue::{address, prop, schema_tool, tool};
 use crate::mcp::json::Json;
 
 pub fn tools() -> Vec<Json> {
     vec![
+        tool(
+            "self_modifying",
+            "What has rewritten code that had already run, and with what: a patched \
+             operand, a jump turned on and off, or a loader moving a block over its own \
+             start. Only writes that changed the byte count. Needs watch_routines on while \
+             it happened.",
+            [
+                ("from", address("lowest address (default $5B00)")),
+                ("to", address("highest address (default $FFFF)")),
+                (
+                    "limit",
+                    prop("integer", "how many runs to list (default 40)"),
+                ),
+            ],
+        ),
+        schema_tool(
+            "watch_value",
+            "Start logging every change to a byte or a few: when, by which instruction, \
+             from what to what. This answers \"what changes the lives, and when\" without \
+             stopping the machine. Costs a comparison per write while the observer is on, \
+             and turns the observer on. The latest 4096 changes are kept. clear: true stops \
+             every watch.",
+            [
+                ("address", address("the byte, or the first of them")),
+                ("length", prop("integer", "how many bytes (default 1)")),
+                ("clear", prop("boolean", "stop all the watches")),
+            ],
+            &[],
+        ),
+        tool(
+            "value_log",
+            "What the watches have seen. Says which instructions made the changes and how \
+             many each, then the changes themselves, latest last.",
+            [
+                ("address", address("only this byte (default all of them)")),
+                (
+                    "limit",
+                    prop("integer", "how many changes to list (default 40)"),
+                ),
+            ],
+        ),
+        schema_tool(
+            "force_branch",
+            "Make a conditional go the way it has not gone, on a fork of the machine, and \
+             say what code that reached. Runs until the machine reaches the instruction, \
+             turns over the flag it tests (or sets B, for DJNZ), runs on, then puts the \
+             machine back exactly as it was and keeps only the record of what ran, marked \
+             as forced. The flag it turned over is the only thing changed, so what follows \
+             may be something the program could never do: read it, don't believe it. Needs \
+             watch_routines on.",
+            [
+                ("address", address("the conditional instruction")),
+                (
+                    "side",
+                    prop(
+                        "string",
+                        "taken or not_taken (default whichever has not been seen)",
+                    ),
+                ),
+                (
+                    "state",
+                    prop("string", "a saved state to start the fork from"),
+                ),
+                (
+                    "reach_frames",
+                    prop("integer", "how long to wait for it (default 500)"),
+                ),
+                (
+                    "frames",
+                    prop("integer", "how long to run after (default 100)"),
+                ),
+            ],
+            &["address"],
+        ),
         schema_tool(
             "set_data",
             "Say what a stretch of memory holds, so the listing and the assembly export \
