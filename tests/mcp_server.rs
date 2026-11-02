@@ -961,3 +961,128 @@ fn the_paging_can_be_read_and_changed_on_a_128k() {
     assert!(text.contains("ROM 1"), "{text}");
     assert_eq!(server.session.spec.bus.page_reg & 7, 3);
 }
+
+/// A routine run a few times, for what the export says about it.
+fn run_a_small_program(server: &mut Server) {
+    // $8000: LD HL,$9000 : INC (HL) : JP $8000
+    for (i, b) in [0x21u8, 0x00, 0x90, 0x34, 0xC3, 0x00, 0x80]
+        .iter()
+        .enumerate()
+    {
+        server.session.spec.bus.poke(0x8000 + i as u16, *b);
+    }
+    server.session.spec.cpu.pc = 0x8000;
+    call(
+        server,
+        "run_tstates",
+        Json::obj([("tstates", Json::num(500))]),
+    )
+    .unwrap();
+}
+
+fn exported(server: &mut Server) -> String {
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let file = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("zxrs-asm-{}-{file}.asm", std::process::id()));
+    call(
+        server,
+        "export_asm",
+        Json::obj([("path", Json::str(path.display().to_string()))]),
+    )
+    .unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    text
+}
+
+// Working through a game means going back to a saved state again and again, and
+// each of those wiped what was known: Jetpac's export came out with 1,409
+// instructions against the listing's 2,596.
+#[test]
+fn going_back_to_a_saved_state_keeps_what_has_been_seen_running() {
+    let mut server = Server::new();
+    call(
+        &mut server,
+        "save_state",
+        Json::obj([("name", Json::str("a"))]),
+    )
+    .unwrap();
+    run_a_small_program(&mut server);
+    assert!(
+        exported(&mut server).contains("INC (HL)"),
+        "ran, so it's code"
+    );
+    call(
+        &mut server,
+        "restore_state",
+        Json::obj([("name", Json::str("a"))]),
+    )
+    .unwrap();
+    // The state was saved before the program was poked, so put it back.
+    for (i, b) in [0x21u8, 0x00, 0x90, 0x34, 0xC3, 0x00, 0x80]
+        .iter()
+        .enumerate()
+    {
+        server.session.spec.bus.poke(0x8000 + i as u16, *b);
+    }
+    let asm = exported(&mut server);
+    assert!(
+        asm.contains("INC (HL)"),
+        "forgotten by going back: {asm:.600}"
+    );
+}
+
+// The other half: what ran belongs to a program. Another program's bytes at the
+// same address must not be listed as code because the last one ran there.
+#[test]
+fn starting_again_forgets_what_the_last_program_ran() {
+    let mut server = Server::new();
+    call(
+        &mut server,
+        "save_state",
+        Json::obj([("name", Json::str("a"))]),
+    )
+    .unwrap();
+    run_a_small_program(&mut server);
+    call(
+        &mut server,
+        "restore_state",
+        Json::obj([("name", Json::str("a"))]),
+    )
+    .unwrap();
+    call(&mut server, "reset", Json::obj([])).unwrap();
+    for (i, b) in [0x21u8, 0x00, 0x90, 0x34, 0xC3, 0x00, 0x80]
+        .iter()
+        .enumerate()
+    {
+        server.session.spec.bus.poke(0x8000 + i as u16, *b);
+    }
+    assert!(!exported(&mut server).contains("INC (HL)"), "after a reset");
+
+    // And a state saved under a different program is a different program.
+    let mut server = Server::new();
+    call(
+        &mut server,
+        "save_state",
+        Json::obj([("name", Json::str("a"))]),
+    )
+    .unwrap();
+    server.session.loaded = Some("another game".to_string());
+    run_a_small_program(&mut server);
+    call(
+        &mut server,
+        "restore_state",
+        Json::obj([("name", Json::str("a"))]),
+    )
+    .unwrap();
+    for (i, b) in [0x21u8, 0x00, 0x90, 0x34, 0xC3, 0x00, 0x80]
+        .iter()
+        .enumerate()
+    {
+        server.session.spec.bus.poke(0x8000 + i as u16, *b);
+    }
+    assert!(
+        !exported(&mut server).contains("INC (HL)"),
+        "after going back to a state from before that game"
+    );
+}

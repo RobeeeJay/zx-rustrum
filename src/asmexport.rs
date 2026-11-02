@@ -428,7 +428,7 @@ pub fn write(src: &Source) -> Exported {
         ";\n\
          ; $0000-$3FFF is the ROM and is not in this file: calls into it are kept as\n\
          ; addresses, with the ROM's own names as EQUs where they are known.\n\
-         ; Code is what was seen to run since the last reset or snapshot, and\n\
+         ; Code is what was seen to run since this program was started, and\n\
          ; everything else is DEFB. Undocumented instructions, and documented ones\n\
          ; with more than one encoding, are DEFB with the instruction beside them,\n\
          ; so any assembler gives back the same bytes.\n\
@@ -609,9 +609,24 @@ pub fn from_machine(
     symbols: Option<&crate::autodoc::Symbols>,
     program: &str,
 ) -> Exported {
+    from_machine_knowing(spec, notes, symbols, program, &[])
+}
+
+/// As `from_machine`, with what else is known to have run, by physical location
+/// as the tracker keeps it.
+pub fn from_machine_knowing(
+    spec: &Spectrum,
+    notes: &Notes,
+    symbols: Option<&crate::autodoc::Symbols>,
+    program: &str,
+    ran_before: &[bool],
+) -> Exported {
     let memory: Vec<u8> = (0..=0xFFFFu16).map(|a| spec.bus.peek_raw(a)).collect();
     let ran: Vec<bool> = (0..=0xFFFFu16)
-        .map(|a| spec.bus.tracker.executed[spec.bus.phys_index(a)])
+        .map(|a| {
+            let phys = spec.bus.phys_index(a);
+            spec.bus.tracker.executed[phys] || ran_before.get(phys).copied().unwrap_or(false)
+        })
         .collect();
     let rom_name = |a: u16| -> Option<String> {
         let own = notes.label(a);

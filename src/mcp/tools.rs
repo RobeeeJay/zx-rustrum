@@ -107,6 +107,14 @@ pub struct Session {
     pub history: Vec<crate::machine::Undo>,
     /// What is loaded, for machine_info to say.
     pub loaded: Option<String>,
+    /// What had been seen running before the machine last went back to a saved
+    /// state, by physical location as the tracker keeps it. A snapshot clears
+    /// the tracker, which is right when it is a new program and wrong when it is
+    /// the same one being gone over again. Empty until there is something in it.
+    pub ran_before: Vec<bool>,
+    /// What was loaded when each saved state was taken, so going back to one
+    /// from a different program can forget the program that was running.
+    pub state_of: BTreeMap<String, Option<String>>,
     /// Whether a real ROM has been put in. A machine that has just been made
     /// has $FF everywhere the ROM should be, which is RST $38 forty thousand
     /// times over: it runs, it draws rubbish, and it looks from the outside
@@ -140,6 +148,8 @@ impl Session {
             signatures: crate::autodoc::Signatures::empty(),
             rom_dirs: crate::resources::search_dirs(),
             loaded: None,
+            ran_before: Vec::new(),
+            state_of: BTreeMap::new(),
             rom_loaded: false,
         }
     }
@@ -207,6 +217,7 @@ impl Session {
             "set_machine" => self.set_machine(args),
             "reset" => {
                 self.spec.reset();
+                self.ran_before.clear();
                 Ok(format!("Reset. PC ${:04X}", self.spec.cpu.pc))
             }
             "load_tape" => self.load_tape(args),
@@ -369,6 +380,7 @@ impl Session {
         }
         // Asking for a Spectrum puts the ZX81 away.
         self.zx81 = None;
+        self.ran_before.clear();
         let model = match lowered.as_str() {
             "48" | "48k" | "spectrum48" => Model::Spectrum48,
             "128" | "128k" | "spectrum128" => Model::Spectrum128,
@@ -436,6 +448,7 @@ impl Session {
         };
         let tape = Tape::from_bytes(&inner, &bytes)?;
         let blocks = tape.blocks.len();
+        self.ran_before.clear();
         self.ensure_rom()?;
         self.notes = Notes::for_file(&path);
         self.spec.bus.tape = Some(tape);
@@ -452,6 +465,18 @@ impl Session {
             "{} is in the deck: {blocks} blocks. Nothing is playing yet.",
             path.display()
         ))
+    }
+
+    /// Add what the tracker has seen to what was seen before, ahead of it being
+    /// cleared.
+    fn remember_what_ran(&mut self) {
+        let executed = &self.spec.bus.tracker.executed;
+        if self.ran_before.len() != executed.len() {
+            self.ran_before = vec![false; executed.len()];
+        }
+        for (before, now) in self.ran_before.iter_mut().zip(executed.iter()) {
+            *before |= *now;
+        }
     }
 
     /// Type LOAD "" and let the tape run until it stops, with the ROM's own
@@ -520,6 +545,7 @@ impl Session {
         };
         let rom = self.rom_for(model)?;
         self.spec.set_model(model, &rom);
+        self.ran_before.clear();
         let note = if szx {
             crate::szx::load(&mut self.spec, &bytes)?
         } else {
@@ -759,6 +785,7 @@ impl Session {
             out.push_str(&format!(", and written to {path}"));
         }
         self.states.insert(name.clone(), data);
+        self.state_of.insert(name.clone(), self.loaded.clone());
         // And the memory as the CPU sees it, for changed_since. 48K of it,
         // which is nothing beside what a snapshot costs.
         self.memories.insert(
@@ -777,6 +804,7 @@ impl Session {
             let rom = self.rom_for(model)?;
             self.spec.set_model(model, &rom);
             snapshot::load(&mut self.spec, path)?;
+            self.ran_before.clear();
             self.rom_loaded = true;
             return Ok(format!(
                 "Restored from {}. PC ${:04X}",
@@ -799,6 +827,11 @@ impl Session {
                 )
             })?
             .clone();
+        if self.state_of.get(name) == Some(&self.loaded) {
+            self.remember_what_ran();
+        } else {
+            self.ran_before.clear();
+        }
         snapshot::load_sna(&mut self.spec, &data)?;
         Ok(format!(
             "Restored {name:?}. PC ${:04X}, SP ${:04X}",

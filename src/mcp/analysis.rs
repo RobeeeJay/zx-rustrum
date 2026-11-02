@@ -817,17 +817,18 @@ pub fn export_asm(session: &mut Session, args: &Json) -> Result<String, String> 
         .loaded
         .clone()
         .unwrap_or_else(|| "a machine with nothing loaded".into());
-    let out = crate::asmexport::from_machine(
+    let out = crate::asmexport::from_machine_knowing(
         &session.spec,
         &session.notes,
         Some(&session.symbols),
         &program,
+        &session.ran_before,
     );
     std::fs::write(&path, &out.text).map_err(|e| format!("{path}: {e}"))?;
     Ok(format!(
         "Wrote {path}: {} instructions and {} bytes as data. Code is only where it has been \
-         seen to run since the last reset or snapshot; run the program further and export \
-         again to find more of it.",
+         seen to run since this program was started, going back to its saved states included, \
+         and not what only ran under force_branch; run the program further to find more of it.",
         out.instructions, out.data_bytes
     ))
 }
