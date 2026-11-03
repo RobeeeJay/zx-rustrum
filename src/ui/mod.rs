@@ -17,6 +17,7 @@ pub mod present;
 pub mod printerwin;
 pub mod profiler;
 pub mod ram_map;
+pub mod scopewin;
 pub mod sprites;
 pub mod tape;
 pub mod theme;
@@ -477,6 +478,8 @@ pub struct App {
     pub show_input: bool,
     pub show_printer: bool,
     printer_view: printerwin::View,
+    pub show_scope: bool,
+    scope_view: scopewin::View,
     /// A network learning to play, and the game it is learning.
     /// How the main window is showing the picture, and what goes with it.
     pub presentation: present::Presentation,
@@ -682,6 +685,8 @@ impl App {
             show_input: false,
             show_printer: false,
             printer_view: printerwin::View::default(),
+            show_scope: false,
+            scope_view: scopewin::View::default(),
             presentation: present::Presentation::default(),
             fill_scale: 1.0,
             os_fullscreen_seen: false,
@@ -968,6 +973,7 @@ impl App {
             theme::toggle(ui, &mut self.show_sprites, "Graphics");
             theme::toggle(ui, &mut self.show_callflow, "Call flow");
             theme::toggle(ui, &mut self.show_profiler, "Profiler");
+            theme::toggle(ui, &mut self.show_scope, "Scope");
             theme::toggle(ui, &mut self.show_keyboard, "Keyboard");
             if self.spec.bus.model.has_disk() && !self.on_zx81() {
                 theme::toggle(ui, &mut self.show_disk, "Disk");
@@ -2518,6 +2524,7 @@ impl App {
             self.show_hardware = is_open("hardware");
             self.show_input = is_open("joystick");
             self.show_printer = is_open("printer");
+            self.show_scope = is_open("scope");
             self.show_training = is_open("training");
             self.show_microdrive = is_open("microdrive");
         }
@@ -2539,6 +2546,7 @@ impl App {
             ("hardware", self.show_hardware),
             ("joystick", self.show_input),
             ("printer", self.show_printer),
+            ("scope", self.show_scope),
             ("microdrive", self.show_microdrive),
             ("training", self.show_training),
         ]
@@ -4734,6 +4742,7 @@ impl App {
             ("hardware", self.show_hardware),
             ("joystick", self.show_input),
             ("printer", self.show_printer),
+            ("scope", self.show_scope),
             ("microdrive", self.show_microdrive),
             ("training", self.show_training),
         ] {
@@ -5078,6 +5087,40 @@ impl App {
                 },
             );
             self.show_printer = open;
+        }
+
+        // The probe costs a write per sample, so it is only fitted while the
+        // window is open to look at it.
+        let probing = self.show_scope;
+        let audio = self.audio();
+        if probing != audio.scope.is_some() {
+            audio.scope = probing.then(Default::default);
+        }
+        if self.show_scope {
+            let mut open = true;
+            let size = [480.0, 420.0];
+            let default = [720.0, 560.0];
+            ctx.show_viewport_immediate(
+                ViewportId::from_hash_of("scope"),
+                self.restore_window(
+                    "scope",
+                    ViewportBuilder::default().with_title("Scope"),
+                    size,
+                    default,
+                ),
+                |ui, _class| {
+                    self.collect_window_keys(ui.ctx());
+                    if ui.ctx().input(|i| i.viewport().close_requested()) {
+                        open = false;
+                    }
+                    let ctx = ui.ctx().clone();
+                    if self.place_window("scope", &ctx, size, default) {
+                        self.remember_window("scope", &ctx);
+                    }
+                    egui::CentralPanel::default().show(ui, |ui| scopewin::ui(self, ui));
+                },
+            );
+            self.show_scope = open;
         }
 
         if self.show_training && self.zx81.is_none() {

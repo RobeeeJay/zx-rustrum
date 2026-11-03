@@ -253,6 +253,9 @@ pub struct Audio {
     /// only wanted while something is recording it, and keeping one otherwise
     /// would be a growing buffer nobody reads.
     pub tap: Option<Vec<f32>>,
+    /// The Scope window's probe: the last few hundred milliseconds of output,
+    /// kept only while the window is open, since it costs a write per sample.
+    pub scope: Option<crate::scope::Scope>,
     pub cpu_hz: f64,
     t_per_sample: f64,
 
@@ -312,6 +315,7 @@ impl Audio {
             speed_ok: true,
             sample_rate: 48_000.0,
             tap: None,
+            scope: None,
             cpu_hz,
             t_per_sample: cpu_hz / 48_000.0,
             acc: 0.0,
@@ -371,6 +375,7 @@ impl Audio {
         self.speed_ok = live.speed_ok;
         self.gain = live.gain;
         self.tap = live.tap.take();
+        self.scope = live.scope.take();
         self.pending.clear();
     }
 
@@ -503,10 +508,14 @@ impl Audio {
 
         let out = blocked * self.gain;
         self.peak = self.peak.max(out.abs());
+        let out = out.clamp(-1.0, 1.0);
         if let Some(tap) = &mut self.tap {
-            tap.push(out.clamp(-1.0, 1.0));
+            tap.push(out);
         }
-        self.pending.push(out.clamp(-1.0, 1.0));
+        if let Some(scope) = &mut self.scope {
+            scope.push(out);
+        }
+        self.pending.push(out);
         self.produced += 1;
         if self.pending.len() >= 128 {
             self.flush();

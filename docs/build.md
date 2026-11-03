@@ -233,7 +233,7 @@ until ROMs are put where it looks.
 | `src/screen.rs`, `src/crt.rs` | Display rendering, and the tube and composite effects |
 | `src/tracker.rs`, `src/detect.rs` | Access heat maps and back-buffer detection |
 | `src/tape.rs`, `src/flashload.rs` | TZX/TAP parsing, pulse-level playback and Fastload |
-| `src/audio.rs`, `src/audio_out.rs` | AY-3-8912, the mixer, and the cpal output device |
+| `src/audio.rs`, `src/audio_out.rs`, `src/scope.rs` | AY-3-8912, the mixer, the cpal output device, and the Scope window's probe and transform |
 | `src/snapshot.rs`, `src/szx.rs`, `src/scr.rs` | Snapshot and screen formats |
 | `src/rzx.rs`, `src/recorder.rs`, `src/video_out.rs` | RZX recording and playback, and video out through ffmpeg |
 | `src/fdc.rs`, `src/disk.rs`, `src/ipf.rs` | The +3's µPD765A and its disk images |

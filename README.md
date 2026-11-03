@@ -101,7 +101,7 @@ the dropdown, greyed out and saying "(no ROM)". It doesn't vanish and leave
 you wondering where the +3 went.
 
 The second row is **Windows**: RAM map, Debugger, Tape, Back buffer, Graphics,
-Call flow, Profiler, Keyboard, Hardware and Input, plus Disk on a +3, Training
+Call flow, Profiler, Scope, Keyboard, Hardware and Input, plus Disk on a +3, Training
 on a Spectrum, and Microdrive and Printer once the hardware for them is plugged
 in. Each one is a real OS window (an egui *viewport*), and each opens where you
 last left it.
@@ -315,6 +315,18 @@ write counts. Click it to jump the debugger there.
   as `DEFB` with the instruction beside them, so any assembler rebuilds the
   same bytes. Checked with sjasmplus against a real program, byte for byte.
 - A hex/ASCII memory dump with shortcuts to follow HL or SP.
+
+### Scope
+
+An oscilloscope of the sound, with a spectrum analyser under it. The probe is
+on what goes to the sound card, after the volume and the mute, so it shows what
+the speaker is given: turn the volume down and the trace shrinks, mute it and
+the line goes flat. The scope triggers on a rising or falling edge, or free
+runs, from 0.1ms to 5ms a division with up to ×8 gain. The analyser is a
+4,096-point transform on a log frequency axis from 20Hz, in decibels against
+full scale, and names the loudest note it hears, so a beeper tune can be
+checked against the note it was meant to be. **Hold** freezes both. The probe
+only runs while the window is open.
 
 ### Profiler
 

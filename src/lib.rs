@@ -42,6 +42,7 @@ pub mod race;
 pub mod recorder;
 pub mod resources;
 pub mod rzx;
+pub mod scope;
 pub mod scr;
 pub mod screen;
 pub mod snapshot;
