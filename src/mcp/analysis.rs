@@ -333,8 +333,10 @@ pub fn code_map(session: &mut Session, args: &Json) -> Result<String, String> {
         ));
     }
     out.push_str("data (read, never executed):\n");
-    for (low, high) in data.iter().take(60) {
-        let length = *high as u32 - *low as u32 + 1;
+    // data_blocks gives where each block starts and how long it is, longest first.
+    for (low, length) in data.iter().take(60) {
+        let length = *length as u32;
+        let high = (*low as u32 + length - 1) as u16;
         let where_ = match low {
             0x4000..=0x57FF => " — in the display file",
             0x5800..=0x5AFF => " — in the attributes",

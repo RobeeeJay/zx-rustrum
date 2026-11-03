@@ -1425,3 +1425,27 @@ fn a_table_is_not_a_repeated_word_or_a_word_from_far_away() {
         "and a repeated word is not one: {said}"
     );
 }
+
+// The data half of the map gave each block as start and length but printed it as
+// start and end, so Knight Lore's map read "$7DA4-$31C8  4294947877 bytes".
+#[test]
+fn the_code_map_gives_each_block_of_data_from_its_start_to_its_end() {
+    let mut server = Server::new();
+    run_dispatcher(&mut server);
+    let map = call(
+        &mut server,
+        "code_map",
+        Json::obj([("min_length", Json::num(1))]),
+    )
+    .unwrap();
+    // The dispatcher reads its two-entry table of words at $9200.
+    assert!(map.contains("  $9200-$9203  4 bytes"), "{map}");
+    for line in map.lines().filter(|l| l.starts_with("  $")) {
+        let bytes: u64 = line
+            .split_whitespace()
+            .nth(1)
+            .and_then(|n| n.parse().ok())
+            .unwrap_or_else(|| panic!("no byte count in {line:?}"));
+        assert!(bytes <= 65_536, "a block bigger than memory: {line}");
+    }
+}
