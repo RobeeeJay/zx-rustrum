@@ -36,6 +36,12 @@ pub enum Exit {
     Return,
     /// Through a register: JP (HL) and the like.
     Computed(String),
+    /// Through a register to something that returns to `then`, its address
+    /// pushed first: a dispatch through a table, which is a call in all but name.
+    Dispatch {
+        via: String,
+        then: u16,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -83,12 +89,16 @@ pub fn blocks(
 ) -> Vec<Block> {
     // First every instruction reachable inside, and where blocks must start.
     let mut seen: BTreeMap<u16, (String, u8)> = BTreeMap::new();
+    // JP (HL)s whose return address was pushed just before, and where they return.
+    let mut returns: BTreeMap<u16, u16> = BTreeMap::new();
     let mut leaders: BTreeSet<u16> = BTreeSet::from([entry]);
     let mut todo = vec![entry];
     let inside =
         |a: u16| a == entry || (a >= entry && a < entry.wrapping_add(REACH) && !outside(a));
     while let Some(start) = todo.pop() {
         let mut at = start;
+        let mut loaded: Option<(String, u16)> = None;
+        let mut pushed: Option<u16> = None;
         loop {
             if seen.contains_key(&at) || !ran(at) {
                 break;
@@ -113,8 +123,28 @@ pub fn blocks(
                 }
                 break;
             }
-            if t == "RET" || t.starts_with("RETI") || t.starts_with("RETN") || t.starts_with("JP (")
-            {
+            // LD HL,$nnnn then PUSH HL: an address for something to return to.
+            if let Some(rest) = t.strip_prefix("LD ") {
+                if let Some((register, value)) = rest.split_once(",$") {
+                    if let Ok(v) = u16::from_str_radix(value, 16) {
+                        loaded = Some((register.to_string(), v));
+                    }
+                }
+            }
+            if let (Some(register), Some((held, value))) = (t.strip_prefix("PUSH "), &loaded) {
+                if register == held {
+                    pushed = Some(*value);
+                }
+            }
+            if t.starts_with("JP (") {
+                if let Some(then) = pushed.filter(|a| inside(*a)) {
+                    returns.insert(at, then);
+                    leaders.insert(then);
+                    todo.push(then);
+                }
+                break;
+            }
+            if t == "RET" || t.starts_with("RETI") || t.starts_with("RETN") {
                 break;
             }
             if t.starts_with("RET ") {
@@ -150,7 +180,13 @@ pub fn blocks(
                 };
             }
             if t.starts_with("JP (") {
-                break Exit::Computed(t.clone());
+                break match returns.get(&at) {
+                    Some(&then) => Exit::Dispatch {
+                        via: t.clone(),
+                        then,
+                    },
+                    None => Exit::Computed(t.clone()),
+                };
             }
             if t == "RET" || t.starts_with("RETI") || t.starts_with("RETN") {
                 break Exit::Return;
@@ -286,7 +322,10 @@ pub fn export_flowchart(session: &mut Session, args: &Json) -> Result<String, St
         let decision = matches!(b.exit, Exit::Branch { .. } | Exit::ReturnIf { .. });
         tops.push((y, h, decision));
         y += h + if decision { GAP + DIAMOND_H } else { 0.0 } + GAP;
-        if matches!(b.exit, Exit::Return | Exit::Computed(_)) {
+        if matches!(
+            b.exit,
+            Exit::Return | Exit::Computed(_) | Exit::Dispatch { .. }
+        ) {
             y += 24.0;
         }
     }
@@ -307,6 +346,7 @@ pub fn export_flowchart(session: &mut Session, args: &Json) -> Result<String, St
         let (top, h, _) = tops[i];
         let (from_y, target, label, never) = match &b.exit {
             Exit::Jump(t) => (top + h - 6.0, *t, String::new(), false),
+            Exit::Dispatch { then, .. } => (top + h - 6.0, *then, String::new(), false),
             Exit::Branch { taken, .. } => {
                 let last = b.instructions.last().map(|(a, _)| *a).unwrap_or(b.start);
                 let sides = conditional.get(&last).copied().unwrap_or_default();
@@ -489,9 +529,14 @@ pub fn export_flowchart(session: &mut Session, args: &Json) -> Result<String, St
                         down(&mut svg, below, next, "", false);
                     }
                 }
-                Exit::Return | Exit::Computed(_) => {
+                Exit::Return | Exit::Computed(_) | Exit::Dispatch { .. } => {
                     let what = match &b.exit {
                         Exit::Computed(t) => format!("on through {}", t.trim_start_matches("JP ")),
+                        Exit::Dispatch { via, then } => format!(
+                            "on through {}, which returns to {}",
+                            via.trim_start_matches("JP "),
+                            name_of(*then)
+                        ),
                         _ => "return".into(),
                     };
                     svg.push_str(&format!(

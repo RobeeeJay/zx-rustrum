@@ -360,3 +360,60 @@ fn a_flow_chart_needs_the_routine_to_have_run() {
     .unwrap_err();
     assert!(err.contains("has not run"), "{err}");
 }
+
+// A main loop runs each object's handler through a table: it pushes where the
+// handler is to return to and jumps through HL. Stopping at the jump drew the
+// main loop of Knight Lore as one box.
+#[test]
+fn a_dispatch_through_a_table_carries_on_where_the_handler_returns() {
+    let mut server = Server::new();
+    let program: &[(u16, &[u8])] = &[
+        (0x7FF0, &[0xCD, 0x00, 0x80, 0x18, 0xFB]),
+        (
+            0x8000,
+            &[
+                0x21, 0x0A, 0x80, // $8000 dispatch: LD HL,$800A
+                0xE5, // PUSH HL
+                0x21, 0x00, 0x90, // LD HL,$9000
+                0xE9, // JP (HL)
+                0x00, 0x00, // padding
+                0xC9, // $800A back: RET
+            ],
+        ),
+        (0x9000, &[0xC9]),
+    ];
+    for (at, bytes) in program {
+        for (i, b) in bytes.iter().enumerate() {
+            server.session.spec.bus.poke(at + i as u16, *b);
+        }
+    }
+    server.session.spec.cpu.pc = 0x7FF0;
+    server.session.spec.cpu.sp = 0xFF00;
+    label(&mut server, "$8000", "dispatch", "");
+    label(&mut server, "$800A", "back", "");
+    call(&mut server, "watch_routines", Json::obj([])).unwrap();
+    call(
+        &mut server,
+        "run_tstates",
+        Json::obj([("tstates", Json::num(500))]),
+    )
+    .unwrap();
+    let path = temp("dispatch.svg");
+    call(
+        &mut server,
+        "export_flowchart",
+        Json::obj([
+            ("address", Json::str("$8000")),
+            ("path", Json::str(path.display().to_string())),
+        ]),
+    )
+    .unwrap();
+    let svg = std::fs::read_to_string(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(
+        svg.contains("on through (HL), which returns to back"),
+        "{svg}"
+    );
+    assert!(svg.contains(">back</text>"), "and carries on there: {svg}");
+    assert!(svg.contains(">return</text>"), "{svg}");
+}
