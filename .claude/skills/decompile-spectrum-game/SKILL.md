@@ -219,7 +219,8 @@ makes the final export reproducible.
 
 Two more things belong beside every finished `.asm`, made from the same session:
 
-- **The call graph:** `export_call_graph` to `disassembly/<name>.callgraph.svg`, while
+- **The call graph:** `export_call_graph` to `disassembly/<name>.callgraph.svg`, with
+  `from` and `to` set to the game's code so the ROM's tape loading stays out, while
   the observer still holds the whole run (after the play, before restoring a state
   restarts nothing, but do it before stopping the server). It names the routines
   from the notes and shows each one's description on hover, so do it after the
