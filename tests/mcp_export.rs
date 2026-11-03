@@ -235,3 +235,128 @@ fn each_bitmap_is_written_as_a_png_named_by_its_label() {
         "the bottom row is the first in memory"
     );
 }
+
+/// A routine with a loop, a decision taken one way only, a call, a jump out and
+/// a return, run for a while.
+fn looping_program() -> Server {
+    let mut server = Server::new();
+    let program: &[(u16, &[u8])] = &[
+        // $7FF0: CALL $8000 : JR $7FF0
+        (0x7FF0, &[0xCD, 0x00, 0x80, 0x18, 0xFB]),
+        (
+            0x8000,
+            &[
+                0x06, 0x03, // $8000 main: LD B,3
+                0xCD, 0x00, 0x90, // $8002 loop: CALL $9000
+                0x10, 0xFB, // $8005 DJNZ loop
+                0xAF, // $8007 XOR A
+                0x20, 0x03, // $8008 JR NZ,$800D, never taken
+                0xC3, 0x00, 0x91, // $800A JP $9100, out
+                0xC9, // $800D RET, never run
+            ],
+        ),
+        (0x9000, &[0xC9]),
+        (0x9100, &[0xC9]),
+    ];
+    for (at, bytes) in program {
+        for (i, b) in bytes.iter().enumerate() {
+            server.session.spec.bus.poke(at + i as u16, *b);
+        }
+    }
+    server.session.spec.cpu.pc = 0x7FF0;
+    server.session.spec.cpu.sp = 0xFF00;
+    label(
+        &mut server,
+        "$8000",
+        "main",
+        "Does the thing three times. Then stops.",
+    );
+    label(&mut server, "$8002", "again", "");
+    label(&mut server, "$9000", "step", "");
+    label(&mut server, "$9100", "elsewhere", "");
+    call(&mut server, "watch_routines", Json::obj([])).unwrap();
+    call(
+        &mut server,
+        "run_tstates",
+        Json::obj([("tstates", Json::num(2_000))]),
+    )
+    .unwrap();
+    server
+}
+
+// The game loop is what a reader wants a picture of, and nothing calls it, so a
+// call graph cannot show it: a flow chart of the routine itself can.
+#[test]
+fn a_flow_chart_shows_the_steps_the_decisions_and_how_often_each_way_went() {
+    let mut server = looping_program();
+    let path = temp("flow.svg");
+    let said = call(
+        &mut server,
+        "export_flowchart",
+        Json::obj([
+            ("address", Json::str("$8000")),
+            ("path", Json::str(path.display().to_string())),
+        ]),
+    )
+    .unwrap();
+    let svg = std::fs::read_to_string(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(
+        svg.contains(">main (") && svg.contains("Does the thing three times."),
+        "{svg}"
+    );
+    assert!(
+        svg.contains(">call step</text>"),
+        "the call, by name: {svg}"
+    );
+    assert!(svg.contains("if B not 0 after one off"), "the DJNZ: {svg}");
+    assert!(svg.contains("if not zero (NZ)"), "the JR NZ: {svg}");
+    assert!(
+        svg.contains(">to elsewhere</text>"),
+        "the jump out, named: {svg}"
+    );
+    assert!(
+        svg.contains(">to $800D, never run</text>"),
+        "the side never taken leads nowhere that ran: {svg}"
+    );
+    assert_eq!(svg.matches("class=\"decision\"").count(), 2, "{said}");
+    // The JR NZ was never taken: its yes is dashed and counted as nought.
+    assert!(svg.contains("yes ×0"), "{svg}");
+    assert!(
+        svg.contains("stroke-dasharray"),
+        "a way never taken is dashed"
+    );
+}
+
+#[test]
+fn a_routine_that_returns_ends_in_a_return() {
+    let mut server = looping_program();
+    let path = temp("step.svg");
+    call(
+        &mut server,
+        "export_flowchart",
+        Json::obj([
+            ("address", Json::str("$9000")),
+            ("path", Json::str(path.display().to_string())),
+        ]),
+    )
+    .unwrap();
+    let svg = std::fs::read_to_string(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(svg.contains(">return</text>"), "{svg}");
+}
+
+#[test]
+fn a_flow_chart_needs_the_routine_to_have_run() {
+    let mut server = looping_program();
+    let err = call(
+        &mut server,
+        "export_flowchart",
+        Json::obj([
+            ("address", Json::str("$A000")),
+            ("path", Json::str(temp("none.svg").display().to_string())),
+        ]),
+    )
+    .unwrap_err();
+    assert!(err.contains("has not run"), "{err}");
+}

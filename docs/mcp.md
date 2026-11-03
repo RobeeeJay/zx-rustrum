@@ -163,7 +163,14 @@ instruction, `[never taken]` and `[always taken]` are branches that only went on
 changed after it ran. They're told apart from comments by being in that form, and
 `facts: false` leaves them out.
 
-**Pictures to keep.** `export_call_graph`, `export_sprites`.
+**Pictures to keep.** `export_flowchart`, `export_call_graph`, `export_sprites`.
+
+`export_flowchart` draws one routine as a flow chart: top to bottom in address order,
+from the code that ran, a box for each run of instructions with what it calls and what
+the notes say, a diamond for each decision with how often each way was taken (dashed
+if never), jumps forward down the right and loops back up the left, and jumps out to
+other routines named at the side. It's the picture of a game loop, which the call graph
+can't give, because a main loop is jumped round and never called.
 
 `export_call_graph` writes who called whom as an SVG: the busiest routines (60 by
 default) in layers from left to right, named from the notes, a thicker line for a call

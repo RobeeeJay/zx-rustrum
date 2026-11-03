@@ -7,6 +7,24 @@ use crate::mcp::json::Json;
 pub fn tools() -> Vec<Json> {
     vec![
         schema_tool(
+            "export_flowchart",
+            "Write one routine as a flow chart in SVG: top to bottom in address order, from \
+             the code that ran, with a box for each run of instructions showing what it calls \
+             and what the notes say, a diamond for each decision with how often each way was \
+             taken, jumps forward down the right and loops back up the left, and jumps out to \
+             other routines named at the side. This is the picture of a game loop the call \
+             graph cannot give, since a main loop is jumped round, not called.",
+            [
+                ("address", address("the routine's first instruction")),
+                ("path", prop("string", "where to write the .svg")),
+                (
+                    "max_blocks",
+                    prop("integer", "most blocks to draw, 1-400 (default 80)"),
+                ),
+            ],
+            &["address", "path"],
+        ),
+        schema_tool(
             "export_call_graph",
             "Write who called whom as an SVG to keep beside a disassembly: the busiest \
              routines laid out in layers left to right, named from the notes, a thicker line \
