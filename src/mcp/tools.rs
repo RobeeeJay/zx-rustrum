@@ -202,14 +202,16 @@ impl Session {
             "save_comments" => crate::mcp::analysis::save_comments(self, args).map(Reply::Text),
             "find_bytes" | "changed_since" | "run_until" | "run_tstates" | "watch_events"
             | "watch_routines" | "routines" | "routine" | "call_graph" | "code_map"
-            | "unexplained" | "self_modifying" | "watch_value" | "value_log" | "force_branch"
-            | "set_data" | "define_struct" | "struct_array" | "bind_struct" | "coverage"
-            | "indirect_jumps" | "xrefs" | "autodoc" | "blocks" | "profile" | "frame_timing"
-            | "sound_state" | "paging" | "memory_activity" | "tape_blocks" | "loader"
-            | "save_state" | "restore_state" | "step_forward" | "step_back" | "press_keys"
-            | "type_text" | "mouse" | "printout" | "load_symbols" | "symbols" | "identify"
-            | "export_listing" | "export_asm" | "load_tape" | "load_snapshot"
-            | "load_recording" | "play_recording" => Err(zx81::not_here(name)),
+            | "export_call_graph" | "export_sprites" | "unexplained" | "self_modifying"
+            | "watch_value" | "value_log" | "force_branch" | "set_data" | "define_struct"
+            | "struct_array" | "bind_struct" | "coverage" | "indirect_jumps" | "xrefs"
+            | "autodoc" | "blocks" | "profile" | "frame_timing" | "sound_state" | "paging"
+            | "memory_activity" | "tape_blocks" | "loader" | "save_state" | "restore_state"
+            | "step_forward" | "step_back" | "press_keys" | "type_text" | "mouse" | "printout"
+            | "load_symbols" | "symbols" | "identify" | "export_listing" | "export_asm"
+            | "load_tape" | "load_snapshot" | "load_recording" | "play_recording" => {
+                Err(zx81::not_here(name))
+            }
             other => Err(format!("no tool called {other:?}; try tools/list")),
         }
     }
@@ -276,6 +278,8 @@ impl Session {
             "value_log" => crate::mcp::changes::value_log(self, args),
             "force_branch" => crate::mcp::coverage::force_branch(self, args),
             "unexplained" => crate::mcp::listing::unexplained(self, args),
+            "export_call_graph" => crate::mcp::export::export_call_graph(self, args),
+            "export_sprites" => crate::mcp::export::export_sprites(self, args),
             "coverage" => crate::mcp::coverage::coverage(self, args),
             "indirect_jumps" => crate::mcp::coverage::indirect_jumps(self, args),
             "blocks" => crate::mcp::analysis::blocks(self, args),

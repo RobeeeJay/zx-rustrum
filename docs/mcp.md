@@ -163,6 +163,16 @@ instruction, `[never taken]` and `[always taken]` are branches that only went on
 changed after it ran. They're told apart from comments by being in that form, and
 `facts: false` leaves them out.
 
+**Pictures to keep.** `export_call_graph`, `export_sprites`.
+
+`export_call_graph` writes who called whom as an SVG: the busiest routines (60 by
+default) in layers from left to right, named from the notes, a thicker line for a call
+made more often and a dashed one going back for a loop, with each routine's
+description as its tooltip. It's the same layout the Call flow window draws, kept as a
+file. `export_sprites` writes every bitmap described with `set_data` as a PNG of its
+own, named by its label: ink black, paper white, and outside a masked sprite's mask
+transparent, the right way up.
+
 **What it does to itself.** `self_modifying`, `watch_value`, `value_log`.
 
 A listing shows one moment's bytes, and on a program that patches its own code,

@@ -61,6 +61,16 @@ pub const MAX_NODES: usize = 40;
 /// are drawn. Only the busiest [`MAX_NODES`] routines are kept: past that a
 /// picture is not a picture.
 pub fn layout(edges: &BTreeMap<(u16, u16), u32>, work: &BTreeMap<u16, u64>) -> Layout {
+    layout_keeping(edges, work, MAX_NODES)
+}
+
+/// As `layout`, keeping the busiest `most` routines rather than [`MAX_NODES`]: a
+/// drawing to keep can afford more than a window can.
+pub fn layout_keeping(
+    edges: &BTreeMap<(u16, u16), u32>,
+    work: &BTreeMap<u16, u64>,
+    most: usize,
+) -> Layout {
     // The routines worth drawing, busiest first, and then back into address
     // order so the picture does not reshuffle itself every time it is drawn.
     let mut kept: Vec<u16> = {
@@ -73,7 +83,7 @@ pub fn layout(edges: &BTreeMap<(u16, u16), u32>, work: &BTreeMap<u16, u64>) -> L
             }
         }
         all.sort_by_key(|(at, w)| (std::cmp::Reverse(*w), *at));
-        all.truncate(MAX_NODES);
+        all.truncate(most);
         all.into_iter().map(|(at, _)| at).collect()
     };
     kept.sort_unstable();

@@ -13,6 +13,7 @@ pub mod control;
 pub mod coverage;
 pub mod deck;
 pub mod disk;
+pub mod export;
 pub mod input;
 pub mod json;
 pub mod layout;

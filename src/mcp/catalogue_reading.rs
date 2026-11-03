@@ -6,6 +6,39 @@ use crate::mcp::json::Json;
 
 pub fn tools() -> Vec<Json> {
     vec![
+        schema_tool(
+            "export_call_graph",
+            "Write who called whom as an SVG to keep beside a disassembly: the busiest \
+             routines laid out in layers left to right, named from the notes, a thicker line \
+             for a call made more often, a dashed one going back for a loop, and each \
+             routine's description as its tooltip. Needs watch_routines on while the program \
+             ran.",
+            [
+                ("path", prop("string", "where to write the .svg")),
+                (
+                    "limit",
+                    prop("integer", "how many routines, 2-200 (default 60)"),
+                ),
+            ],
+            &["path"],
+        ),
+        schema_tool(
+            "export_sprites",
+            "Write every bitmap described with set_data as a PNG of its own into a directory, \
+             named by its label: ink black, paper white, outside a masked sprite's mask \
+             transparent, the right way up. Drawn from memory as it is now.",
+            [
+                ("dir", prop("string", "the directory to write into")),
+                (
+                    "scale",
+                    prop(
+                        "integer",
+                        "screen pixels to each of the sprite's, 1-16 (default 4)",
+                    ),
+                ),
+            ],
+            &["dir"],
+        ),
         tool(
             "unexplained",
             "What has run and has no explanation yet, biggest gap first: for each labelled \
