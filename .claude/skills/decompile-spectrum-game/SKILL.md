@@ -215,12 +215,36 @@ makes the final export reproducible.
    not done rather than calling the file proven. Don't fetch and build one without
    asking.
 
+## 7. The pictures that go with it
+
+Two more things belong beside every finished `.asm`, made from the same session:
+
+- **The call graph:** `export_call_graph` to `disassembly/<name>.callgraph.svg`, while
+  the observer still holds the whole run (after the play, before restoring a state
+  restarts nothing, but do it before stopping the server). It names the routines
+  from the notes and shows each one's description on hover, so do it after the
+  naming. It draws calls only: a main loop nobody calls and handlers reached through
+  a jump table are not in it, and a routine that borrows the stack pointer, as
+  sprite drawers do, can make calls look as if they came from it. Say so if the game
+  relies on either, rather than letting the picture stand for the whole program.
+- **The sprites:** `export_sprites` to `disassembly/<name> sprites/`, from the state
+  the `.asm` was exported from, so the pictures are the bytes in the file. One PNG
+  per bitmap typed with `set_data`, named by its label: ink black, paper white,
+  outside a masked sprite's mask transparent, the right way up. Name sprites by what
+  they are where you can, since the file name is the label; a sprite numbered by its
+  type is better than none, but it is not a description.
+
+Look at both before calling them done: render the SVG (on macOS, `qlmanage -t -s 1400
+-o DIR FILE.svg`) and open a few PNGs. A sprite that comes out as noise means the
+format, the width or the mask is wrong.
+
 ## What to report
 
 What was built and where; coverage, split into played, poked and forced; what the
 round trip and the tape comparison showed; what is a reading rather than a
 measurement; what was corrected along the way; and what is still unknown.
 
-The finished `.asm` goes in `disassembly/`, under the tape's name. Copyright stays
+The finished `.asm` goes in `disassembly/`, under the tape's name, with its call
+graph and its sprites beside it. Copyright stays
 with the game's owners, so that directory is gitignored like `tapes/`, and nothing in
 it is published or committed.
