@@ -158,6 +158,20 @@ pub fn sampler_at<F: Fn(u16) -> u8>(peek: &F, at: u16) -> Option<&'static str> {
         .map(|(name, _)| *name)
 }
 
+/// Each sampling loop's bytes, with whatever the loop may hold anywhere put
+/// down as zero, for whatever wants to read them as instructions.
+pub fn sampler_patterns() -> impl Iterator<Item = (&'static str, Vec<u8>)> {
+    CORES.iter().map(|(name, pattern)| {
+        (
+            *name,
+            pattern
+                .iter()
+                .map(|b| if *b == ANY { 0 } else { *b as u8 })
+                .collect(),
+        )
+    })
+}
+
 /// Is the machine sitting in a loader's sampling loop at all?
 pub fn at_sampler(spec: &Spectrum) -> bool {
     sampler(spec).is_some()

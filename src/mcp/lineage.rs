@@ -1,211 +1,102 @@
-//! Fingerprinting a game's code, and placing it among the games already
-//! fingerprinted: which earlier ones hold its code, how much, and whose code
-//! that was. The measuring is in `src/lineage.rs`; this is the tools and the
-//! page that draws the result.
+//! Placing every disassembled game in a family tree: which earlier games hold
+//! its code, how much, and whose code that was. The measuring is in
+//! `src/lineage.rs`; this is the tools and the page that draws the result.
 
 use std::path::{Path, PathBuf};
 
 use crate::lineage::{self, Fingerprint, Game, Lineage};
+use crate::machine::Model;
 use crate::mcp::json::Json;
-use crate::mcp::tools::{addr_of, text, Session};
+use crate::mcp::tools::{text, Session};
 
-/// The file the machine was loaded from, if it was loaded from one.
-fn loaded_path(session: &Session) -> Option<PathBuf> {
-    let loaded = session.loaded.as_deref()?;
-    let (_, path) = loaded.split_once(' ')?;
-    Some(PathBuf::from(path))
-}
+/// Where `export_asm`'s files are kept, and so where the games are read from.
+pub const DISASSEMBLIES: &str = "disassembly";
 
-fn sidecar(source: &Path) -> PathBuf {
-    source.with_extension(lineage::EXTENSION)
-}
-
-/// `[["$8000", "$80FF"], ...]`: what is not the game.
-fn ranges(args: &Json, key: &str) -> Result<Vec<(u16, u16)>, String> {
-    let Some(Json::Arr(items)) = args.get(key) else {
-        return Ok(Vec::new());
+/// The game a disassembly is of: what its file name says, then what ZXDB
+/// says, with a word on what ZXDB made of it when that was nothing.
+fn game_for(file_name: &str, zxdb: Option<&str>) -> (Game, Option<String>) {
+    let mut game = lineage::from_file_name(file_name);
+    let Some(list) = zxdb else {
+        return (game, None);
     };
-    items
-        .iter()
-        .map(|item| match item {
-            Json::Arr(pair) if pair.len() == 2 => Ok((addr_of(&pair[0])?, addr_of(&pair[1])?)),
-            other => Err(format!(
-                "{key} wants pairs like [\"$8000\", \"$80FF\"], not {other}"
-            )),
-        })
-        .collect()
-}
-
-pub fn fingerprint(session: &mut Session, args: &Json) -> Result<String, String> {
-    if !session.rom_loaded {
-        return Err(
-            "there is no ROM in the machine, so nothing it ran is a game: load one first".into(),
-        );
-    }
-    let source = loaded_path(session);
-    let path = match (args.get("path"), &source) {
-        (Some(_), _) => PathBuf::from(text(args, "path")?),
-        (None, Some(source)) => sidecar(source),
-        (None, None) => {
-            return Err("nothing was loaded from a file, so say where to write it with path".into())
+    match lineage::find_in_zxdb(list, &game) {
+        Ok(found) => {
+            game.title = found.title;
+            game.year = found.year.or(game.year);
+            if !found.publisher.is_empty() {
+                game.publisher = found.publisher;
+            }
+            game.authors = found.authors;
+            game.zxdb = found.zxdb;
+            (game, None)
         }
-    };
-
-    // What the file name says, then ZXDB, then whatever was given outright.
-    let file_name = source
-        .as_ref()
-        .and_then(|s| s.file_name())
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_default();
-    let mut game = lineage::from_file_name(&file_name);
-    if let Some(title) = args.get("title").and_then(|v| v.as_str()) {
-        game.title = title.to_string();
+        Err(why) => (game, Some(why)),
     }
-    if let Some(year) = args.get("year").and_then(|v| v.as_i64()) {
-        game.year = Some(year as u16);
-    }
-    if let Some(publisher) = args.get("publisher").and_then(|v| v.as_str()) {
-        game.publisher = publisher.to_string();
-    }
-    if game.title.is_empty() {
-        return Err("the game needs a title: give one with title".into());
-    }
-    let zxdb_note = match crate::prefs::config_dir().map(|d| d.join(lineage::ZXDB_FILE)) {
-        Some(file) => match std::fs::read_to_string(&file) {
-            Ok(list) => match lineage::find_in_zxdb(&list, &game) {
-                Ok(found) => {
-                    let note = format!("ZXDB entry {}", found.zxdb.unwrap_or(0));
-                    merge(&mut game, found);
-                    note
-                }
-                Err(why) => why,
-            },
-            Err(_) => format!(
-                "no {} in the preferences directory, so no authors: tools/zxdb-games.py writes it",
-                lineage::ZXDB_FILE
-            ),
-        },
-        None => "no preferences directory, so no ZXDB".into(),
-    };
-    if let Some(authors) = args.get("authors").and_then(|v| v.as_str()) {
-        game.authors = lineage::parse_authors(authors);
-    }
-
-    let exclude = ranges(args, "exclude")?;
-    let bus = &session.spec.bus;
-    let peek = |a: u16| bus.peek_raw(a);
-    let ran = |a: u16| {
-        let phys = bus.phys_index(a);
-        bus.tracker.executed[phys] || session.ran_before.get(phys).copied().unwrap_or(false)
-    };
-    let label = |a: u16| {
-        let own = session.notes.label(a);
-        if !own.is_empty() {
-            return Some(own.to_string());
-        }
-        session.symbols.get(a).map(|(name, _)| name.to_string())
-    };
-    let rom = lineage::rom_grams(&peek);
-    let print = Fingerprint {
-        game,
-        source: file_name,
-        ..lineage::take(&peek, &ran, &label, &rom, &exclude)
-    };
-    let instructions = print.instructions();
-    if instructions == 0 {
-        return Err(
-            "nothing outside the ROM has run since the machine was loaded: run the game first"
-                .into(),
-        );
-    }
-    std::fs::write(&path, lineage::to_text(&print))
-        .map_err(|e| format!("{}: {e}", path.display()))?;
-
-    let game = &print.game;
-    let mut out = format!(
-        "Wrote {}.\n{} — {} — {}. {zxdb_note}.\n",
-        path.display(),
-        game.title,
-        game.year
-            .map(|y| y.to_string())
-            .unwrap_or_else(|| "year not known".into()),
-        if game.publisher.is_empty() {
-            "publisher not known"
-        } else {
-            &game.publisher
-        },
-    );
-    out.push_str(&format!(
-        "Authors: {}\n",
-        if game.authors.is_empty() {
-            "not known".to_string()
-        } else {
-            lineage::authors_text(&game.authors)
-        }
-    ));
-    out.push_str(&format!(
-        "{instructions} instructions that ran, in {} runs, {} fragments once the ROM's own are taken out.\n",
-        print.blocks.len(),
-        print.grams().len()
-    ));
-    let left: usize = print.left_out.len();
-    if left > 0 {
-        out.push_str(&format!("{left} runs left out:\n"));
-        for (low, high, why) in print.left_out.iter().take(10) {
-            out.push_str(&format!("  ${low:04X}-${high:04X} {why}\n"));
-        }
-    }
-    if !print.techniques.is_empty() {
-        out.push_str("Techniques:\n");
-        for (name, at) in &print.techniques {
-            out.push_str(&format!("  ${at:04X} {}\n", lineage::describe(name)));
-        }
-    }
-    out.push_str(
-        "Only code that ran is in it, so a game played further holds more. Call lineage to place it.",
-    );
-    Ok(out)
 }
 
-/// Take what ZXDB says, keeping a title, year or publisher already given
-/// where ZXDB has none.
-fn merge(game: &mut Game, found: Game) {
-    game.title = found.title;
-    game.year = found.year.or(game.year);
-    if !found.publisher.is_empty() {
-        game.publisher = found.publisher;
+fn corpus_dir(args: &Json) -> Result<PathBuf, String> {
+    match args.get("dir") {
+        Some(_) => Ok(PathBuf::from(text(args, "dir")?)),
+        None => Ok(PathBuf::from(DISASSEMBLIES)),
     }
-    game.authors = found.authors;
-    game.zxdb = found.zxdb;
 }
 
-fn corpus_dir(session: &Session, args: &Json) -> Result<PathBuf, String> {
-    if args.get("dir").is_some() {
-        return Ok(PathBuf::from(text(args, "dir")?));
+/// Every disassembly in a directory, fingerprinted, and what could not be
+/// said about any of them. A file that cannot be read is named rather than
+/// left out quietly, since a game missing from the tree reads as a game with
+/// no relatives.
+pub fn read_corpus(
+    session: &Session,
+    dir: &Path,
+) -> Result<(Vec<Fingerprint>, Vec<String>), String> {
+    let rom = session.rom_for(Model::Spectrum48).map_err(|_| {
+        "the 48K ROM is needed, to take the ROM's own routines out of every game: put it in roms/"
+            .to_string()
+    })?;
+    let rom = lineage::rom_grams(&|a: u16| rom.get(a as usize).copied().unwrap_or(0));
+    let zxdb = crate::prefs::config_dir()
+        .and_then(|d| std::fs::read_to_string(d.join(lineage::ZXDB_FILE)).ok());
+    let mut notes = Vec::new();
+    if zxdb.is_none() {
+        notes.push(format!(
+            "No {} in the preferences directory, so no authors: tools/zxdb-games.py writes it.",
+            lineage::ZXDB_FILE
+        ));
     }
-    Ok(loaded_path(session)
-        .and_then(|p| p.parent().map(Path::to_path_buf))
-        .unwrap_or_else(|| PathBuf::from("tapes")))
-}
-
-/// Every fingerprint in a directory.
-pub fn read_corpus(dir: &Path) -> Result<Vec<Fingerprint>, String> {
-    let entries = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .map_err(|e| format!("{}: {e}", dir.display()))?
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| n.to_ascii_lowercase().ends_with(".asm"))
+        .collect();
+    names.sort();
     let mut games = Vec::new();
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name.ends_with(&format!(".{}", lineage::EXTENSION)) {
-            let text = std::fs::read_to_string(entry.path()).map_err(|e| format!("{name}: {e}"))?;
-            games.push(lineage::parse(&text));
+    for name in names {
+        let text = std::fs::read_to_string(dir.join(&name)).map_err(|e| format!("{name}: {e}"))?;
+        let disassembly = match lineage::read::read_asm(&text) {
+            Ok(d) => d,
+            Err(why) => {
+                notes.push(format!("{name} was not read: {why}."));
+                continue;
+            }
+        };
+        let (game, why) = game_for(&name, zxdb.as_deref());
+        if let Some(why) = why {
+            notes.push(format!("{name}: {why}, so its authors are not known."));
         }
+        games.push(Fingerprint {
+            game,
+            source: name,
+            ..lineage::from_disassembly(&disassembly, &rom, &[])
+        });
     }
     if games.is_empty() {
         return Err(format!(
-            "no fingerprints in {}: call fingerprint on each game first",
+            "no disassembly could be read in {}: export_asm writes one, as <tape name>.asm",
             dir.display()
         ));
     }
-    Ok(games)
+    Ok((games, notes))
 }
 
 fn year(game: &Game) -> String {
@@ -299,10 +190,11 @@ fn draw_tree(
 }
 
 pub fn lineage(session: &mut Session, args: &Json) -> Result<String, String> {
-    let dir = corpus_dir(session, args)?;
-    let tree = Lineage::new(read_corpus(&dir)?);
+    let dir = corpus_dir(args)?;
+    let (games, notes) = read_corpus(session, &dir)?;
+    let tree = Lineage::new(games);
     let mut out = format!(
-        "{} games fingerprinted in {}, oldest first. A share is how much of the later game's \
+        "{} games disassembled in {}, oldest first. A share is how much of the later game's \
          code is also in the earlier one: fragments of {} instructions, a fragment that many \
          games hold counting for less. Within a year the order is by title and says nothing \
          about which came first.\n\n",
@@ -310,18 +202,24 @@ pub fn lineage(session: &mut Session, args: &Json) -> Result<String, String> {
         dir.display(),
         lineage::GRAM
     );
+    for note in &notes {
+        out.push_str(&format!("{note}\n"));
+    }
+    if !notes.is_empty() {
+        out.push('\n');
+    }
     let kids = children(&tree);
     for root in (0..tree.games.len()).filter(|g| tree.parent[*g].is_none()) {
         draw_tree(&tree, &kids, root, "", true, true, &mut out);
     }
 
-    let focus = match args.get("game").and_then(|v| v.as_str()) {
-        Some(title) => Some(
-            tree.index_of(title)
-                .ok_or_else(|| format!("no fingerprint of a game called {title:?}"))?,
-        ),
-        None => None,
-    };
+    let focus =
+        match args.get("game").and_then(|v| v.as_str()) {
+            Some(title) => Some(tree.index_of(title).ok_or_else(|| {
+                format!("no disassembly of a game called {title:?} in the folder")
+            })?),
+            None => None,
+        };
     match focus {
         Some(game) => out.push_str(&about(&tree, game)),
         None => {
@@ -357,7 +255,7 @@ fn about(tree: &Lineage, game: usize) -> String {
     let print = &tree.games[game];
     let g = &print.game;
     let mut out = format!(
-        "\n{} ({}, {})\nauthors: {}\n{} instructions that ran, {} fragments.\n",
+        "\n{} ({}, {})\nauthors: {}\n{} instructions in its disassembly, {} fragments.\n",
         g.title,
         year(g),
         g.publisher,
@@ -438,15 +336,17 @@ const GUTTER: f32 = 8.0;
 
 pub fn export_lineage(session: &mut Session, args: &Json) -> Result<String, String> {
     let path = PathBuf::from(text(args, "path")?);
-    let dir = corpus_dir(session, args)?;
-    let tree = Lineage::new(read_corpus(&dir)?);
+    let dir = corpus_dir(args)?;
+    let (games, notes) = read_corpus(session, &dir)?;
+    let tree = Lineage::new(games);
     std::fs::write(&path, page(&tree)).map_err(|e| format!("{}: {e}", path.display()))?;
     let roots = tree.parent.iter().filter(|p| p.is_none()).count();
     Ok(format!(
-        "Wrote {}: {} games, {} links drawn as branches, {roots} with no earlier relative.",
+        "Wrote {}: {} games, {} links drawn as branches, {roots} with no earlier relative.{}",
         path.display(),
         tree.games.len(),
-        tree.games.len() - roots
+        tree.games.len() - roots,
+        notes.iter().map(|n| format!("\n{n}")).collect::<String>()
     ))
 }
 
@@ -557,7 +457,7 @@ pub fn page(tree: &Lineage) -> String {
          <h1>Game lineage</h1>\n\
          <p class=\"lede\">{} games, oldest first within each family. A branch goes to the \
          earlier game holding the most of a game's code, and its number is how much: fragments \
-         of {} instructions that ran, the ROM's own taken out, a fragment many games hold counting \
+         of {} instructions from each game's disassembly, the ROM's own taken out, a fragment many games hold counting \
          for less. Dashed lines on the right are other earlier games holding at least {} of it. \
          Within a year the order is by title and says nothing about which came first.</p>\n\
          <div class=\"tree\">{svg}</div>\n{details}</main>\n</body>\n</html>\n",
@@ -580,7 +480,7 @@ fn game_section(tree: &Lineage, game: usize) -> String {
     let g = &print.game;
     let mut out = format!(
         "<section id=\"g{game}\">\n<h2>{} <span>{} · {}</span></h2>\n<p>Authors: {}</p>\n\
-         <p class=\"small\">{} instructions that ran, {} fragments{}.</p>\n",
+         <p class=\"small\">{} instructions in its disassembly, {} fragments{}.</p>\n",
         escape(&g.title),
         escape(if g.publisher.is_empty() {
             "publisher not known"

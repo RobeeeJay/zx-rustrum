@@ -210,9 +210,7 @@ impl Session {
             | "restore_state" | "step_forward" | "step_back" | "press_keys" | "type_text"
             | "mouse" | "printout" | "load_symbols" | "symbols" | "identify" | "export_listing"
             | "export_asm" | "load_tape" | "load_snapshot" | "load_recording"
-            | "play_recording" | "fingerprint" | "lineage" | "export_lineage" => {
-                Err(zx81::not_here(name))
-            }
+            | "play_recording" | "lineage" | "export_lineage" => Err(zx81::not_here(name)),
             other => Err(format!("no tool called {other:?}; try tools/list")),
         }
     }
@@ -308,7 +306,6 @@ impl Session {
             "save_comments" => crate::mcp::analysis::save_comments(self, args),
             "export_listing" => crate::mcp::listing::export_listing(self, args),
             "export_asm" => crate::mcp::analysis::export_asm(self, args),
-            "fingerprint" => crate::mcp::lineage::fingerprint(self, args),
             "lineage" => crate::mcp::lineage::lineage(self, args),
             "export_lineage" => crate::mcp::lineage::export_lineage(self, args),
             other => Err(format!("no tool called {other:?}; try tools/list")),
@@ -412,7 +409,7 @@ impl Session {
     }
 
     /// The ROM image for a model, from wherever the emulator keeps them.
-    fn rom_for(&self, model: Model) -> Result<Vec<u8>, String> {
+    pub(crate) fn rom_for(&self, model: Model) -> Result<Vec<u8>, String> {
         let names: &[&str] = match model {
             Model::Spectrum48 => &["48.rom", "spectrum48.rom", "48k.rom"],
             Model::Spectrum128 => &["128.rom", "spectrum128.rom"],

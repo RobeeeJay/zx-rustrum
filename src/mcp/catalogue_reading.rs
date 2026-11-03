@@ -7,49 +7,21 @@ use crate::mcp::json::Json;
 pub fn tools() -> Vec<Json> {
     vec![
         tool(
-            "fingerprint",
-            "Fingerprint the game's code, for lineage to compare it with other games. Takes \
-             the code that has run since the game was loaded — so run the game, and play it, \
-             first: what never ran is not in it — blanks the addresses in it so a routine moved \
-             elsewhere still matches, and hashes it in fragments of five instructions. The ROM's \
-             own fragments and the runs beside a tape loader's sampling loop are left out. \
-             Title, year and publisher come from a TOSEC-style file name, and authors from \
-             zxdb-games.txt in the preferences directory if tools/zxdb-games.py has written it. \
-             Written beside the tape as <name>.lineage.txt unless path says otherwise.",
-            [
-                ("path", prop("string", "where to write it (default beside the loaded file)")),
-                ("title", prop("string", "the game's title, if the file name does not say")),
-                ("year", prop("integer", "the year it came out")),
-                ("publisher", prop("string", "who published it")),
-                (
-                    "authors",
-                    prop(
-                        "string",
-                        "who wrote it, as \"Name (Code, Music); Name\", in place of ZXDB's list",
-                    ),
-                ),
-                (
-                    "exclude",
-                    prop(
-                        "array",
-                        "ranges that are not the game, such as a loader the tool did not \
-                         recognise: [[\"$5B00\", \"$5BFF\"], ...]",
-                    ),
-                ),
-            ],
-        ),
-        tool(
             "lineage",
-            "Place every fingerprinted game in a family tree, oldest first: for each game the \
-             earlier game holding the most of its code, how much, and the other relatives. With \
-             game, one game's relatives in both directions, the techniques they share, and each \
-             of its routines found in an earlier game with who is suspected of writing it.",
+            "Place every disassembled game in a family tree, oldest first. Each game is read \
+             from its .asm in disassembly/, the file export_asm writes, so a game is only in the \
+             tree once it has been disassembled. For each game: the earlier game holding the most \
+             of its code, how much, and the other relatives. Title, year and publisher come from \
+             the file's TOSEC-style name, and authors from zxdb-games.txt in the preferences \
+             directory, which tools/zxdb-games.py writes. With game, one game's relatives in \
+             both directions, the techniques they share, and each of its routines found in an \
+             earlier game with who is suspected of writing it.",
             [
                 (
                     "dir",
                     prop(
                         "string",
-                        "the directory of .lineage.txt files (default the loaded file's, else tapes)",
+                        "the directory of .asm files (default disassembly)",
                     ),
                 ),
                 ("game", prop("string", "a title to look at closely")),
@@ -57,7 +29,7 @@ pub fn tools() -> Vec<Json> {
         ),
         schema_tool(
             "export_lineage",
-            "Write the family tree of every fingerprinted game as one HTML page to share: the \
+            "Write the family tree of every disassembled game as one HTML page to share: the \
              tree drawn oldest first, each game with its publisher, year and authors, how much \
              of it each relative holds, and the routines it shares with suspected authors.",
             [
@@ -66,7 +38,7 @@ pub fn tools() -> Vec<Json> {
                     "dir",
                     prop(
                         "string",
-                        "the directory of .lineage.txt files (default the loaded file's, else tapes)",
+                        "the directory of .asm files (default disassembly)",
                     ),
                 ),
             ],

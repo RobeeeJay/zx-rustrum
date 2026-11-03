@@ -1,61 +1,14 @@
-//! Fingerprinting games and placing them in a family tree.
+//! Placing disassembled games in a family tree by the code they share.
 
 use std::collections::{BTreeMap, HashSet};
 
-use zx_rustrum::lineage::{self, Author, Block, Fingerprint, Game, Lineage};
+use zx_rustrum::lineage::{self, read, Author, Block, Fingerprint, Game, Lineage};
 use zx_rustrum::mcp::json::{parse, Json};
 use zx_rustrum::mcp::Server;
 
-/// A memory image with code put where asked, and the instruction starts of
-/// each piece marked as having run, as the tracker would have them.
-struct Machine {
-    memory: Vec<u8>,
-    ran: HashSet<u16>,
-}
-
-impl Machine {
-    fn new() -> Machine {
-        Machine {
-            memory: vec![0; 0x10000],
-            ran: HashSet::new(),
-        }
-    }
-
-    fn put(&mut self, at: u16, code: &[u8]) {
-        self.memory[at as usize..at as usize + code.len()].copy_from_slice(code);
-        let peek = |a: u16| self.memory[a as usize];
-        let mut here = at;
-        let mut starts = Vec::new();
-        while (here as usize) < at as usize + code.len() {
-            starts.push(here);
-            here += zx_rustrum::disasm::disasm(&peek, here).len.max(1) as u16;
-        }
-        self.ran.extend(starts);
-    }
-
-    fn take(&self, rom: &HashSet<u64>) -> Fingerprint {
-        let peek = |a: u16| self.memory[a as usize];
-        lineage::take(&peek, &|a| self.ran.contains(&a), &|_| None, rom, &[])
-    }
-}
-
-/// A drawing loop of the sort a game moves about with its tables: the page
-/// its buffer is on and the routine it calls are the only things that change.
-fn routine(page: u8, call: u16) -> Vec<u8> {
-    let [low, high] = call.to_le_bytes();
-    vec![
-        0x06, 0x08, // LD B,$08
-        0x26, page, // LD H,page
-        0x6F, // LD L,A
-        0x7E, // LD A,(HL)
-        0x24, // INC H
-        0xC6, 0x10, // ADD A,$10
-        0x77, // LD (HL),A
-        0xCD, low, high, // CALL nn
-        0x05, // DEC B
-        0x20, 0xF4, // JR NZ,loop
-        0xC9, // RET
-    ]
+fn fingerprint(asm: &str, rom: &HashSet<u64>) -> Fingerprint {
+    let disassembly = read::read_asm(asm).unwrap_or_else(|e| panic!("{e}\n{asm}"));
+    lineage::from_disassembly(&disassembly, rom, &[])
 }
 
 fn grams(blocks: &[Block]) -> HashSet<u64> {
@@ -65,20 +18,37 @@ fn grams(blocks: &[Block]) -> HashSet<u64> {
         .collect()
 }
 
+/// A drawing loop of the sort a game takes with it into the next one: where
+/// it is, the page its buffer is on and what it calls are all that change.
+fn routine(org: &str, page: &str, call: &str) -> String {
+    format!(
+        "        ORG {org}
+draw:
+        LD B,$08
+        LD H,{page}
+        LD L,A
+again:
+        LD A,(HL)
+        INC H
+        ADD A,$10
+        LD (HL),A
+        CALL {call}
+        DEC B
+        JR NZ,again
+        RET
+"
+    )
+}
+
 // The commonest way code is shared is a programmer taking a routine into the
 // next game, where it lands somewhere else with its tables somewhere else.
 // Blanking only the sixteen-bit operands lost those: the page byte in LD H,n
 // moved with the tables.
 #[test]
 fn a_routine_moved_to_another_address_with_its_tables_still_matches() {
-    let mut here = Machine::new();
-    here.put(0x8000, &routine(0xB7, 0x9123));
-    let mut there = Machine::new();
-    there.put(0xC000, &routine(0xC2, 0xD456));
-    let (a, b) = (
-        grams(&here.take(&HashSet::new()).blocks),
-        grams(&there.take(&HashSet::new()).blocks),
-    );
+    let here = fingerprint(&routine("$8000", "$B7", "plot"), &HashSet::new());
+    let there = fingerprint(&routine("$C000", "$C2", "$D456"), &HashSet::new());
+    let (a, b) = (grams(&here.blocks), grams(&there.blocks));
     assert!(!a.is_empty(), "the routine should yield fragments");
     assert_eq!(
         a, b,
@@ -88,37 +58,123 @@ fn a_routine_moved_to_another_address_with_its_tables_still_matches() {
 
 #[test]
 fn different_code_shares_no_fragments() {
-    let mut here = Machine::new();
-    here.put(0x8000, &routine(0xB7, 0x9123));
-    let mut there = Machine::new();
-    // LD A,(HL) / AND A / RLA / LD (DE),A / INC DE / DJNZ / RET.
-    there.put(0x8000, &[0x7E, 0xA7, 0x17, 0x12, 0x13, 0x10, 0xF9, 0xC9]);
-    let common: Vec<u64> = grams(&here.take(&HashSet::new()).blocks)
-        .intersection(&grams(&there.take(&HashSet::new()).blocks))
-        .copied()
-        .collect();
-    assert!(
-        common.is_empty(),
-        "unrelated code should share nothing, shared {}",
-        common.len()
+    let here = fingerprint(&routine("$8000", "$B7", "plot"), &HashSet::new());
+    let there = fingerprint(
+        "        ORG $8000
+        LD A,(HL)
+        AND A
+        RLA
+        LD (DE),A
+        INC DE
+        DJNZ $8000
+        RET
+",
+        &HashSet::new(),
     );
+    let common = grams(&here.blocks)
+        .intersection(&grams(&there.blocks))
+        .count();
+    assert_eq!(common, 0, "unrelated code should share nothing");
+}
+
+// The same instruction is written many ways — in decimal, in hex, by a name —
+// and a fragment has to come out the same however it was written, or two
+// disassemblies of one program would look unrelated.
+#[test]
+fn an_instruction_has_one_shape_however_it_is_written() {
+    let shape = |text: &str| read::shape(&read::canonical(text));
+    assert_eq!(shape("ld a,(32768)"), "LD A,(n)");
+    assert_eq!(shape("LD A,(score)"), "LD A,(n)");
+    assert_eq!(shape("LD A,($8000)"), "LD A,(n)");
+    assert_eq!(shape("BIT 7,(IX+3)"), "BIT 7,(IX+n)");
+    assert_eq!(shape("bit 7,(ix-$03)"), "BIT 7,(IX+n)");
+    assert_eq!(shape("EX AF,AF'"), "EX AF,AF'");
+    assert_eq!(
+        shape("RST $38"),
+        shape("RST 56"),
+        "a restart is part of the opcode"
+    );
+    assert_ne!(shape("RST $38"), shape("RST $10"));
+    assert_eq!(read::canonical("out (254),a"), "OUT ($FE),A");
+}
+
+// An .asm says nothing about where each instruction is, so the addresses are
+// counted from the ORG. One instruction of a length nobody knows would put
+// everything after it in the wrong place, which is worse than stopping.
+#[test]
+fn an_instruction_of_unknown_length_stops_the_reading_with_its_line() {
+    let refused = read::read_asm("        ORG $8000\n        NOP\n        FROB A\n");
+    assert!(
+        refused.as_ref().is_err_and(|e| e.contains("line 3")),
+        "the reading should stop at line 3: {refused:?}"
+    );
+}
+
+// Every label the notes place is where counting up from the ORG puts it, in
+// each disassembly there is to check: if one were a byte out, every routine
+// named after it would be named wrongly.
+#[test]
+fn every_label_in_an_exported_disassembly_is_where_the_notes_put_it() {
+    let pairs = [
+        (
+            "disassembly/Jetpac (1983)(Ultimate Play The Game)[16K].asm",
+            "tapes/Jetpac (1983)(Ultimate Play The Game)[16K].zxrs.txt",
+        ),
+        (
+            "disassembly/Knight Lore (1984)(Ultimate Play The Game).asm",
+            "recordings/KnightLore.zxrs.txt",
+        ),
+        (
+            "disassembly/Alien 8 (1985)(Ultimate Play The Game).asm",
+            "recordings/Alien8.zxrs.txt",
+        ),
+    ];
+    let mut checked = 0;
+    for (asm, notes) in pairs {
+        let (Ok(asm_text), Ok(notes_text)) =
+            (std::fs::read_to_string(asm), std::fs::read_to_string(notes))
+        else {
+            eprintln!("need {asm} and {notes}; skipping that one");
+            continue;
+        };
+        let disassembly = read::read_asm(&asm_text).unwrap();
+        let notes = zx_rustrum::notes::parse(&notes_text);
+        let placed: BTreeMap<&str, u16> = notes
+            .iter()
+            .filter(|(_, n)| !n.label.is_empty())
+            .map(|(at, n)| (n.label.as_str(), *at))
+            .collect();
+        for (at, name) in &disassembly.labels {
+            if let Some(there) = placed.get(name.as_str()) {
+                assert_eq!(
+                    *at, *there,
+                    "{asm}: {name} counted to ${at:04X}, the notes say ${there:04X}"
+                );
+                checked += 1;
+            }
+        }
+    }
+    eprintln!("{checked} labels checked");
 }
 
 // A game that copies a ROM routine into RAM is not thereby related to every
 // other game that does.
 #[test]
 fn a_copy_of_a_rom_routine_is_not_counted() {
-    let code = routine(0x58, 0x0D6B);
+    // The routine's bytes, at $1000 in a ROM.
+    let code = [
+        0x06, 0x08, 0x26, 0x58, 0x6F, 0x7E, 0x24, 0xC6, 0x10, 0x77, 0xCD, 0x6B, 0x0D, 0x05, 0x20,
+        0xF4, 0xC9,
+    ];
     let mut rom = vec![0u8; 0x4000];
     rom[0x1000..0x1000 + code.len()].copy_from_slice(&code);
     let rom_grams = lineage::rom_grams(&|a: u16| rom.get(a as usize).copied().unwrap_or(0));
-    let mut machine = Machine::new();
-    machine.put(0x9000, &code);
-    let blocks = machine.take(&rom_grams).blocks;
+    let copy = fingerprint(&routine("$9000", "$58", "$0D6B"), &rom_grams);
     assert_eq!(
-        grams(&blocks).len(),
+        grams(&copy.blocks).len(),
         0,
-        "the copy's fragments are all the ROM's: {blocks:?}"
+        "the copy's fragments are all the ROM's: {:?}",
+        copy.blocks
     );
 }
 
@@ -127,75 +183,69 @@ fn a_copy_of_a_rom_routine_is_not_counted() {
 // in, it made two games by different people look 17% related.
 #[test]
 fn the_whole_of_a_packed_loader_is_left_out_not_only_the_part_beside_its_sampler() {
-    let mut machine = Machine::new();
-    machine.put(0x8000, &routine(0xB7, 0x9123));
-    // The ROM's sampling loop with the BREAK test taken out, as Speedlock has it.
-    machine.put(
-        0xFC00,
-        &[
-            0x04, 0xC8, 0x3E, 0x7F, 0xDB, 0xFE, 0x1F, 0xA9, 0xE6, 0x20, 0x28, 0xF4, 0xC9,
-        ],
+    let mut asm = routine("$8000", "$B7", "plot");
+    asm.push_str(
+        "        ORG $FC00
+        INC B
+        RET Z
+        LD A,$7F
+        IN A,($FE)
+        RRA
+        XOR C
+        AND $20
+        JR Z,$FC00
+        RET
+",
     );
-    // More of the loader every $30 bytes, the last well past $100 above it.
     for at in (0xFC30..=0xFD50).step_by(0x30) {
-        machine.put(at, &routine(0x40, 0xFC00));
+        asm.push_str(&routine(&format!("${at:04X}"), "$40", "$FC00"));
     }
-    let Fingerprint {
-        blocks,
-        techniques,
-        left_out,
-        ..
-    } = machine.take(&HashSet::new());
-    let starts: Vec<u16> = blocks.iter().map(|b| b.start).collect();
+    let print = fingerprint(&asm, &HashSet::new());
+    let starts: Vec<u16> = print.blocks.iter().map(|b| b.start).collect();
     assert_eq!(
         starts,
         vec![0x8000],
-        "only the game's routine should be left; left out {left_out:?}"
+        "only the game's routine should be left; left out {:?}",
+        print.left_out
     );
     assert!(
-        left_out.iter().any(|(low, _, _)| *low == 0xFD50),
-        "the run $150 above the sampler is the loader too: {left_out:?}"
+        print.left_out.iter().any(|(low, _, _)| *low == 0xFD50),
+        "the run $150 above the sampler is the loader too: {:?}",
+        print.left_out
     );
     assert!(
-        techniques.keys().any(|t| t.starts_with("loader:")),
-        "which loader it was is still worth saying: {techniques:?}"
+        print.techniques.keys().any(|t| t.starts_with("loader:")),
+        "which loader it was is still worth saying: {:?}",
+        print.techniques
     );
 }
 
+// The loaders are recognised by their instructions' shapes, written out by
+// hand; this keeps each one to the bytes the fast loader matches, so the two
+// cannot drift apart.
 #[test]
-fn a_fingerprint_reads_back_as_it_was_written() {
-    let mut machine = Machine::new();
-    machine.put(0x8000, &routine(0xB7, 0x9123));
-    let Fingerprint {
-        blocks,
-        techniques,
-        left_out,
-        ..
-    } = machine.take(&HashSet::new());
-    let mut blocks = blocks;
-    blocks[0].label = "draw_loop".into();
-    let print = Fingerprint {
-        game: Game {
-            title: "Saboteur!".into(),
-            year: Some(1985),
-            publisher: "Durell Software Ltd".into(),
-            authors: lineage::parse_authors("Clive Townsend; Tim Hayward (Inlay/Poster Art)"),
-            zxdb: Some(4293),
-        },
-        source: "Saboteur (1986)(Durell Software).tzx".into(),
-        blocks,
-        techniques,
-        left_out: vec![(
-            0xFC00,
-            0xFC0C,
-            "part of the loader round the ROM's sampler".into(),
-        )]
-        .into_iter()
-        .chain(left_out)
-        .collect(),
-    };
-    let text = lineage::to_text(&print);
-    assert_eq!(lineage::parse(&text), print, "the file was:\n{text}");
+fn each_loader_shape_is_the_sampling_loop_flashload_knows() {
+    for (name, bytes) in zx_rustrum::flashload::sampler_patterns() {
+        let peek = |a: u16| bytes.get(a as usize).copied().unwrap_or(0);
+        let mut shapes = Vec::new();
+        let mut at = 0u16;
+        while (at as usize) < bytes.len() {
+            let insn = zx_rustrum::disasm::disasm(&peek, at);
+            shapes.push(read::shape(&read::canonical(&insn.text)));
+            at += insn.len.max(1) as u16;
+        }
+        let (_, pattern) = lineage::LOADERS
+            .iter()
+            .find(|(n, _)| *n == name)
+            .unwrap_or_else(|| panic!("no shape written for {name:?}"));
+        assert!(
+            shapes.windows(pattern.len()).any(|w| w
+                .iter()
+                .zip(pattern.iter())
+                .all(|(a, b)| *b == "*" || a == b)),
+            "{name}: {pattern:?} is not in what its bytes decode as, {shapes:?}"
+        );
+    }
 }
 
 #[test]
@@ -354,84 +404,62 @@ fn call(server: &mut Server, tool: &str, args: Json) -> Result<String, String> {
     }
 }
 
+// A disassembly that cannot be read must say so: a game missing from the tree
+// reads as a game with no relatives.
 #[test]
-fn a_machine_with_no_rom_is_not_fingerprinted() {
-    let mut server = Server::new();
-    let refused = call(
-        &mut server,
-        "fingerprint",
-        Json::obj([("path", Json::str("/dev/null"))]),
-    );
-    assert!(
-        refused.as_ref().is_err_and(|why| why.contains("no ROM")),
-        "an empty machine runs RST $38 and nothing else: {refused:?}"
-    );
-}
-
-// The end-to-end check against games whose relationship is known: Jetpac and
-// Pssst are both Chris Stamper's, a few months apart, and shared code.
-#[test]
-fn pssst_hangs_off_jetpac_when_both_are_fingerprinted_from_their_tapes() {
-    let tapes = [
-        "tapes/Jetpac (1983)(Ultimate Play The Game)[16K].tzx",
-        "tapes/Pssst (1983)(Ultimate Play The Game)[16K].tzx",
-    ];
-    if std::fs::read("roms/48.rom").is_err() || tapes.iter().any(|t| std::fs::read(t).is_err()) {
-        eprintln!("need roms/48.rom and the Jetpac and Pssst tapes; skipping");
+fn a_disassembly_that_cannot_be_read_is_named_not_left_out_quietly() {
+    if std::fs::read("roms/48.rom").is_err() {
+        eprintln!("need roms/48.rom; skipping");
         return;
     }
-    let dir = std::env::temp_dir().join(format!("zxrs-lineage-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("zxrs-lineage-bad-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    for (i, tape) in tapes.iter().enumerate() {
-        let mut server = Server::new();
-        call(
-            &mut server,
-            "load_tape",
-            Json::obj([("path", Json::str(*tape))]),
-        )
-        .unwrap();
-        call(
-            &mut server,
-            "run_frames",
-            Json::obj([("frames", Json::num(500))]),
-        )
-        .unwrap();
-        let path = dir.join(format!("{i}.lineage.txt"));
-        let made = call(
-            &mut server,
-            "fingerprint",
-            Json::obj([("path", Json::str(path.to_str().unwrap()))]),
-        )
-        .unwrap();
-        assert!(made.contains("instructions that ran"), "{made}");
-    }
+    std::fs::write(
+        dir.join("Good (1984)(Somebody).asm"),
+        routine("$8000", "$B7", "plot"),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("Bad (1985)(Somebody).asm"),
+        "        ORG $8000\n        FROB A\n",
+    )
+    .unwrap();
     let mut server = Server::new();
     let tree = call(
         &mut server,
         "lineage",
         Json::obj([("dir", Json::str(dir.to_str().unwrap()))]),
-    )
-    .unwrap();
-    let html = dir.join("lineage.html");
-    call(
-        &mut server,
-        "export_lineage",
-        Json::obj([
-            ("dir", Json::str(dir.to_str().unwrap())),
-            ("path", Json::str(html.to_str().unwrap())),
-        ]),
-    )
-    .unwrap();
-    let page = std::fs::read_to_string(&html).unwrap();
+    );
     std::fs::remove_dir_all(&dir).ok();
+    let tree = tree.unwrap();
+    assert!(
+        tree.contains("Bad (1985)(Somebody).asm was not read") && tree.contains("line 2"),
+        "the unreadable file and why should be named:\n{tree}"
+    );
+}
 
+// The end-to-end check against games whose relationship is known: Alien 8 is
+// built on Knight Lore's Filmation engine, and Jetpac, a year earlier, is not.
+#[test]
+fn alien_8_hangs_off_knight_lore_in_the_disassembly_folder() {
+    let needed = [
+        "roms/48.rom",
+        "disassembly/Knight Lore (1984)(Ultimate Play The Game).asm",
+        "disassembly/Alien 8 (1985)(Ultimate Play The Game).asm",
+    ];
+    if needed.iter().any(|f| std::fs::metadata(f).is_err()) {
+        eprintln!("need {needed:?}; skipping");
+        return;
+    }
+    let mut server = Server::new();
+    let tree = call(&mut server, "lineage", Json::obj([])).unwrap();
     let line = tree
         .lines()
-        .find(|l| l.contains("Pssst"))
-        .unwrap_or_else(|| panic!("no Pssst in:\n{tree}"));
+        .find(|l| l.contains("Alien 8") && l.contains("of its code is in"))
+        .unwrap_or_else(|| panic!("Alien 8 hangs off nothing in:\n{tree}"));
     assert!(
-        line.contains("of its code is in Jetpac"),
-        "Pssst should hang off Jetpac:\n{tree}"
+        line.contains("Knight Lore"),
+        "Alien 8 should hang off Knight Lore: {line}"
     );
     let share: f64 = line
         .split("— ")
@@ -440,11 +468,21 @@ fn pssst_hangs_off_jetpac_when_both_are_fingerprinted_from_their_tapes() {
         .and_then(|s| s.trim().parse().ok())
         .unwrap_or_else(|| panic!("no share in {line:?}"));
     assert!(
-        share >= 20.0,
-        "Jetpac should hold a good part of Pssst, held {share}%"
+        share >= 50.0,
+        "Knight Lore should hold most of Alien 8, held {share}%"
     );
+
+    let page = std::env::temp_dir().join(format!("zxrs-lineage-{}.html", std::process::id()));
+    call(
+        &mut server,
+        "export_lineage",
+        Json::obj([("path", Json::str(page.to_str().unwrap()))]),
+    )
+    .unwrap();
+    let html = std::fs::read_to_string(&page).unwrap();
+    std::fs::remove_file(&page).ok();
     assert!(
-        page.contains("<title>Game Lineage</title>") && page.contains("Pssst"),
+        html.contains("<title>Game Lineage</title>") && html.contains("Alien 8"),
         "the page names the games"
     );
 }
