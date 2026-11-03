@@ -51,6 +51,17 @@ emulator itself, as the project's CLAUDE.md asks.
 4. Start a game and `save_state {"name": "game-start"}`. Save more along the way
    (one per level, say): forcing a branch is only practical from a state near it.
 
+### From a recording instead of a tape
+
+An RZX is a snapshot of the game already loaded and a player's input to replay, so
+it reaches far more of the game than random play: Knight Lore's 87-minute recording
+played through in under a minute and ran 8,556 bytes of code. `load_recording`
+switches the observer **off**, so call `watch_routines` after it, then save the
+recording's first frame as the state to export from, and `play_recording` the lot,
+saving a state every few thousand frames to force branches from later. There is no
+tape to compare with, so say the export is the machine at the recording's first
+frame, and what had already happened by then.
+
 ## 2. Find the shape before reading any code
 
 - `tape_blocks` and `scripts/tape_blocks.py TAPE` show what loads where. Small
@@ -104,6 +115,14 @@ bitmap it comes out as blank or nonsense pictures. Describe it as workspace, nam
 the routine that fills it, and leave its bytes as bytes. Picture the art where it
 is actually stored.
 
+Prove a sprite format before typing a hundred of them: if each sprite's length by
+your reading ends exactly where the next one in the table begins, the reading is
+right. Knight Lore's width looked like "low three bits plus one" from the drawing
+routine, and every sprite then overran the next. The plus one is the extra byte a
+sprite needs when it is drawn across a byte boundary; the true width is the low four
+bits, and with it the 103 sprites sit end to end. Sprites drawn over a background
+keep a mask byte before each byte of picture: pass `masked: true`.
+
 `set_data` warns when a claim covers code that has run. Take the warning: a table
 typed eight words too long swallowed the start of a routine and nothing else
 noticed, because the bytes still came out right.
@@ -127,7 +146,17 @@ Then write, using `set_comment` (a label, a comment, or both):
   tested, what a constant means, where a value came from. Keep them under ~50
   characters or they move above the line.
 - `unexplained` also ranks routines by how many instructions have no comment. It
-  counts and does not judge, so use it to pick what to read next.
+  counts and does not judge, so use it to pick what to read next. With `limit: 0`
+  it lists nothing, the routines reached only through a table included: give it a
+  limit to see them, and name those too.
+- **Name handlers from their code, not from what you think the game has.** Knight
+  Lore's "sun and moon" handler was the floating charm the wizard asks for, which
+  only reading what it compares and copies showed.
+- **Read your own disassembly dump with care around data.** A dump disassembled
+  straight through runs data into the next instruction, so a label put where the
+  dump showed an instruction can be a byte inside one. The export decodes from what
+  ran and gets it right, and roundtrip.py reports such a label as an EQU inside the
+  range.
 
 Things that cost time on Jetpac:
 
