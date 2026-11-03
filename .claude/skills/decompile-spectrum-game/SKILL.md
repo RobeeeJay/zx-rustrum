@@ -75,6 +75,20 @@ frame, and what had already happened by then.
   since one handler's +5 is another's countdown) before writing comments, so the
   listing says `(IX+speed_y)` and `rocket.fuel` from then on.
 
+### A game on an engine already done
+
+Ultimate's Filmation games share their engine, and so do many others. Before reading
+a second one from nothing, carry the names across:
+`scripts/port_names.py DONE.lst NEW.lst` matches each routine of a finished
+disassembly by its first instructions, with addresses and names blanked, and prints
+the ones found exactly once. On Alien 8 from Knight Lore that was about 300 of 600,
+the engine nearly whole. Keep the names; rewrite the comments, which name the first
+game's addresses and its rules (Knight Lore's charms are Alien 8's valves). A line
+comment carries only where the two routines match instruction for instruction up to
+it. And when a name you give lands on a second address, one of the two is wrong:
+on Alien 8 every such clash was the newer name, and the collision loops had been
+named in the wrong order.
+
 ## 3. Reach the code
 
 `coverage` is the measure of progress: what has run, what could be reached from
