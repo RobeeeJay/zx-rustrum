@@ -638,8 +638,10 @@ pub fn export_flowchart(session: &mut Session, args: &Json) -> Result<String, St
         .filter(|b| matches!(b.exit, Exit::Branch { .. } | Exit::ReturnIf { .. }))
         .count();
     Ok(format!(
-        "Wrote {path}: {} blocks and {decisions} decisions of {title}{}.",
+        "Wrote {path}: {} block{} and {decisions} decision{} of {title}{}.",
         found.len(),
+        if found.len() == 1 { "" } else { "s" },
+        if decisions == 1 { "" } else { "s" },
         if cut { ", cut short at max_blocks" } else { "" }
     ))
 }

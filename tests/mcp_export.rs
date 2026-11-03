@@ -332,7 +332,7 @@ fn a_flow_chart_shows_the_steps_the_decisions_and_how_often_each_way_went() {
 fn a_routine_that_returns_ends_in_a_return() {
     let mut server = looping_program();
     let path = temp("step.svg");
-    call(
+    let said = call(
         &mut server,
         "export_flowchart",
         Json::obj([
@@ -344,6 +344,8 @@ fn a_routine_that_returns_ends_in_a_return() {
     let svg = std::fs::read_to_string(&path).unwrap();
     let _ = std::fs::remove_file(&path);
     assert!(svg.contains(">return</text>"), "{svg}");
+    // One straight run of code is one block, and the reply says so in English.
+    assert!(said.contains(": 1 block and 0 decisions of step"), "{said}");
 }
 
 #[test]
