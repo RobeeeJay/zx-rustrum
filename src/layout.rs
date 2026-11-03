@@ -17,12 +17,14 @@ pub enum Kind {
     Text,
     /// `width` bytes a row for `rows` rows, after `header` bytes that are not
     /// picture. Some programs draw up the screen, so the first row in memory is
-    /// the bottom of the picture.
+    /// the bottom of the picture. A masked bitmap keeps a mask byte before each
+    /// byte of picture, so a row is twice `width` bytes long.
     Bitmap {
         width: u8,
         rows: u16,
         header: u8,
         bottom_up: bool,
+        masked: bool,
     },
 }
 
@@ -176,10 +178,12 @@ impl Layout {
                     rows,
                     header,
                     bottom_up,
+                    masked,
                 } => format!(
-                    "data {:04X} bitmap {width} {rows} {header}{}",
+                    "data {:04X} bitmap {width} {rows} {header}{}{}",
                     typed.at,
-                    if bottom_up { " bottom_up" } else { "" }
+                    if bottom_up { " bottom_up" } else { "" },
+                    if masked { " masked" } else { "" }
                 ),
             });
         }
@@ -242,7 +246,9 @@ impl Layout {
                 if let (Some(at), Some(width), Some(rows), Some(header)) =
                     (hex(at), number(width), number(rows), number(header))
                 {
-                    self.set_bitmap(at, width as u8, rows, header as u8, rest == ["bottom_up"]);
+                    let bottom_up = rest.contains(&"bottom_up");
+                    let masked = rest.contains(&"masked");
+                    self.set_bitmap_with(at, width as u8, rows, header as u8, bottom_up, masked);
                 }
             }
             _ => {}
@@ -254,7 +260,20 @@ impl Layout {
     }
 
     pub fn set_bitmap(&mut self, at: u16, width: u8, rows: u16, header: u8, bottom_up: bool) {
-        let length = header as u16 + width as u16 * rows;
+        self.set_bitmap_with(at, width, rows, header, bottom_up, false);
+    }
+
+    pub fn set_bitmap_with(
+        &mut self,
+        at: u16,
+        width: u8,
+        rows: u16,
+        header: u8,
+        bottom_up: bool,
+        masked: bool,
+    ) {
+        let stride = width as u16 * if masked { 2 } else { 1 };
+        let length = header as u16 + stride * rows;
         self.set_data(
             at,
             Kind::Bitmap {
@@ -262,6 +281,7 @@ impl Layout {
                 rows,
                 header,
                 bottom_up,
+                masked,
             },
             length,
         );
@@ -302,15 +322,25 @@ pub fn picture(typed: &Typed, peek: &dyn Fn(u16) -> u8) -> Vec<String> {
         rows,
         header,
         bottom_up,
+        masked,
     } = typed.kind
     else {
         return Vec::new();
     };
     let width = width.max(1) as u16;
+    let (stride, step, first) = if masked {
+        (width * 2, 2, 1)
+    } else {
+        (width, 1, 0)
+    };
     let mut lines: Vec<String> = (0..rows)
         .map(|row| {
-            let start = typed.at.wrapping_add(header as u16 + row * width);
-            let bytes: Vec<u8> = (0..width).map(|i| peek(start.wrapping_add(i))).collect();
+            let start = typed.at.wrapping_add(header as u16 + row * stride);
+            // Only the picture's bytes: the mask is what the sprite clears
+            // behind it, and drawn in too it would hide the shape.
+            let bytes: Vec<u8> = (0..width)
+                .map(|i| peek(start.wrapping_add(first + i * step)))
+                .collect();
             let line: String = pixels(&bytes)
                 .chars()
                 .map(|c| if c == '#' { "##" } else { "  " })
@@ -394,10 +424,11 @@ pub fn rows(typed: &Typed, peek: &dyn Fn(u16) -> u8) -> Vec<Row> {
             width,
             header,
             bottom_up,
+            masked,
             ..
         } => {
             let header = (header as usize).min(bytes.len());
-            let width = width.max(1) as usize;
+            let width = width.max(1) as usize * if masked { 2 } else { 1 };
             let mut out = Vec::new();
             if header > 0 {
                 out.push(Row {

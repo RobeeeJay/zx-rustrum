@@ -34,8 +34,16 @@ pub fn set_data(session: &mut Session, args: &Json) -> Result<String, String> {
                 ));
             }
             let bottom_up = flag(args, "bottom_up", false);
+            let masked = flag(args, "masked", false);
             session.notes.change_layout(|l| {
-                l.set_bitmap(at, width as u8, rows as u16, header as u8, bottom_up)
+                l.set_bitmap_with(
+                    at,
+                    width as u8,
+                    rows as u16,
+                    header as u8,
+                    bottom_up,
+                    masked,
+                )
             });
         }
         other => {

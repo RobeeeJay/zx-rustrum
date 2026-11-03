@@ -212,7 +212,9 @@ It's drawn at two characters a pixel, because a character is about twice as tall
 it's wide and one a pixel squashes a sprite to a sliver. Width, rows and how many
 bytes of header come first are yours to give, because a game's sprite format is its
 own. A game that draws up the screen keeps its sprites upside down, and `bottom_up`
-turns the picture the right way up while the rows stay in memory order. To compare
+turns the picture the right way up while the rows stay in memory order. A sprite
+drawn over a background usually keeps a mask byte before each byte of picture;
+`masked` pictures only the picture bytes, so the shape is not lost in the mask. To compare
 a byte with its pixels, `bitmap_rows` on `export_listing` puts each row's pixels
 beside it instead.
 

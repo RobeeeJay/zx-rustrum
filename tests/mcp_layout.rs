@@ -95,6 +95,14 @@ fn every_kind_of_row_stands_for_exactly_the_bytes_it_was_made_from() {
             rows: 7,
             header: 3,
             bottom_up: true,
+            masked: false,
+        },
+        Kind::Bitmap {
+            width: 1,
+            rows: 7,
+            header: 3,
+            bottom_up: false,
+            masked: true,
         },
     ] {
         let typed = Typed {
@@ -282,6 +290,34 @@ fn a_bitmap_drawn_upwards_shows_the_picture_the_right_way_up_beside_its_own_byte
     assert_eq!(rows[0].beside, "####.... | ....####");
     assert_eq!(rows[1].directive, "DEFB $0F");
     assert_eq!(rows[1].beside, "....#### | ####....");
+}
+
+// Knight Lore keeps a mask byte before every byte of a sprite. Drawn together the
+// two are noise; the shape is the picture bytes alone.
+#[test]
+fn a_masked_bitmap_is_pictured_from_its_picture_bytes_alone() {
+    let mut layout = Layout::default();
+    layout.set_bitmap_with(0x8000, 1, 2, 0, false, true);
+    let typed = layout.data[&0x8000];
+    assert_eq!(
+        typed.length, 4,
+        "a mask and a picture byte for each of two rows"
+    );
+    // Rows: mask $0F with picture $F0, then mask $FF with picture $81.
+    let memory = [0x0Fu8, 0xF0, 0xFF, 0x81];
+    let peek = |a: u16| memory[(a - 0x8000) as usize];
+    assert_eq!(
+        zx_rustrum::layout::picture(&typed, &peek),
+        vec!["########".to_string(), "##            ##".to_string()]
+    );
+    let rows = rows(&typed, &peek);
+    assert_eq!(rows[0].directive, "DEFB $0F,$F0");
+    assert_eq!(rows[1].directive, "DEFB $FF,$81");
+    let mut back = Layout::default();
+    for line in layout.to_lines() {
+        back.read_line(&line);
+    }
+    assert_eq!(back, layout, "kept in the notes file as it was said");
 }
 
 // A table of addresses is the map of a program, and it is only one if the

@@ -127,6 +127,15 @@ pub fn tools() -> Vec<Json> {
                          up, and the rows stay in memory order.",
                     ),
                 ),
+                (
+                    "masked",
+                    prop(
+                        "boolean",
+                        "each byte of picture has a mask byte before it, as in sprites \
+                         drawn over a background: width is still the picture's bytes a row, \
+                         and only those are drawn in the picture",
+                    ),
+                ),
             ],
             &["address", "kind"],
         ),
