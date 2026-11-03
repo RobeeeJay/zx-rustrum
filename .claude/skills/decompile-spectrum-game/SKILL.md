@@ -97,6 +97,13 @@ Expect a residue that never runs. Say what it is and why it was not reached.
   does), the sprites are stored upside down: pass `bottom_up: true`. Check one
   picture against the screen before typing fifty.
 
+Type what the file will hold, not what memory held when you looked. The export is
+the game as loaded, so a buffer the game fills at run time (pre-shifted sprites, a
+decompressed level, a back buffer) is empty or leftover junk there: typed as a
+bitmap it comes out as blank or nonsense pictures. Describe it as workspace, name
+the routine that fills it, and leave its bytes as bytes. Picture the art where it
+is actually stored.
+
 `set_data` warns when a claim covers code that has run. Take the warning: a table
 typed eight words too long swallowed the start of a routine and nothing else
 noticed, because the bytes still came out right.

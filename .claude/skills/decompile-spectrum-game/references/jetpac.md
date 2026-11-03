@@ -47,6 +47,10 @@ expect. The game's own files are in `tapes/` and not in the repository.
 - **A table 8 words too long** typed over the start of the next routine. The bytes
   still matched, so only an unexpected EQU gave it away; `set_data` now warns.
 - **Descriptions overwritten** by one-line comments on the same address.
+- **Blank and junk pictures.** The pre-shifted sprite workspace at $5E00–$5FFF was
+  typed as bitmaps while looking at a game in progress, where it held the level's
+  enemy. Exported as loaded it holds nothing yet, and eight pictures came out blank
+  or noise. It is now bytes, described as workspace.
 - **The 128K "autoload bug"** was the game crashing: the 128K ROM decrements $5B89
   every other frame, the first byte of the stub's LDIR. It runs from 48 BASIC.
 - **Two bytes differed from the tape** at the menu: the menu sets the flash bit on
