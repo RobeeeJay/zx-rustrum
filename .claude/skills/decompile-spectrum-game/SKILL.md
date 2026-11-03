@@ -176,6 +176,8 @@ makes the final export reproducible.
 
 What was built and where; coverage, split into played, poked and forced; what the
 round trip and the tape comparison showed; what is a reading rather than a
-measurement; what was corrected along the way; and what is still unknown. Copyright
-stays with the game's owners, so the outputs belong in `tapes/` (gitignored) and are
-not published.
+measurement; what was corrected along the way; and what is still unknown.
+
+The finished `.asm` goes in `disassembly/`, under the tape's name. Copyright stays
+with the game's owners, so that directory is gitignored like `tapes/`, and nothing in
+it is published or committed.

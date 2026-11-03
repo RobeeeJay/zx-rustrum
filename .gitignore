@@ -9,6 +9,10 @@
 /tapes/*
 !/tapes/.gitkeep
 
+# And what is made from them: a disassembly is the game's code with notes on it.
+/disassembly/*
+!/disassembly/.gitkeep
+
 .DS_Store
 *.afdesign~lock~
 recordings/
