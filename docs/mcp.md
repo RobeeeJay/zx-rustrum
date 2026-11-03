@@ -170,7 +170,11 @@ from the code that ran, a box for each run of instructions with what it calls an
 the notes say, a diamond for each decision with how often each way was taken (dashed
 if never), jumps forward down the right and loops back up the left, and jumps out to
 other routines named at the side. It's the picture of a game loop, which the call graph
-can't give, because a main loop is jumped round and never called.
+can't give, because a main loop is jumped round and never called. A handler run
+through a table — the return address pushed, then `JP (HL)`, or a `JP` to a lone
+`JP (HL)` somewhere else — is drawn as a call that comes back where the push said, and
+a jump back to code the chart has already fallen into is a loop, even if something
+else calls that code too.
 
 `export_call_graph` writes who called whom as an SVG: the busiest routines (60 by
 default) in layers from left to right, named from the notes, a thicker line for a call

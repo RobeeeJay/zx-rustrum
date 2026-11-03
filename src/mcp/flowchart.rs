@@ -81,6 +81,13 @@ fn condition(text: &str) -> Option<String> {
 
 /// The blocks of the routine at `entry`, followed through the code that ran.
 /// `outside` says whether a jump to an address leaves the routine.
+/// The `JP (rr)` at the target of a `JP $nnnn`, if that is all the target does.
+fn trampoline(peek: &dyn Fn(u16) -> u8, target: &str) -> Option<String> {
+    let at = u16::from_str_radix(target.strip_prefix('$')?, 16).ok()?;
+    let insn = disasm(&|a| peek(a), at);
+    insn.text.starts_with("JP (").then_some(insn.text)
+}
+
 pub fn blocks(
     peek: &dyn Fn(u16) -> u8,
     ran: &dyn Fn(u16) -> bool,
@@ -109,6 +116,15 @@ pub fn blocks(
             seen.insert(at, (insn.text.clone(), len));
             let t = insn.text.as_str();
             let jump = t.starts_with("JR ") || t.starts_with("JP ") || t.starts_with("DJNZ ");
+            // A plain JP to a JP (HL) is that JP (HL), reached through a trampoline.
+            if t.starts_with("JP $") && trampoline(peek, &t[3..]).is_some() {
+                if let Some(then) = pushed.filter(|a| !outside(*a)) {
+                    returns.insert(at, then);
+                    leaders.insert(then);
+                    todo.push(then);
+                }
+                break;
+            }
             if jump && !t.contains('(') {
                 for target in targets(t) {
                     if inside(target) {
@@ -136,8 +152,9 @@ pub fn blocks(
                     pushed = Some(*value);
                 }
             }
+            // Where a dispatch comes back to is part of the routine, however far away.
             if t.starts_with("JP (") {
-                if let Some(then) = pushed.filter(|a| inside(*a)) {
+                if let Some(then) = pushed.filter(|a| !outside(*a)) {
                     returns.insert(at, then);
                     leaders.insert(then);
                     todo.push(then);
@@ -151,6 +168,21 @@ pub fn blocks(
                 leaders.insert(next);
             }
             at = next;
+        }
+    }
+    // A jump back to code walked into by falling through is a loop, not a way
+    // out, even when somebody else calls that code.
+    for (&at, (t, len)) in &seen {
+        let jumps = t.starts_with("JR ") || t.starts_with("JP ") || t.starts_with("DJNZ ");
+        if jumps && !t.contains('(') {
+            for target in targets(t) {
+                if seen.contains_key(&target) {
+                    leaders.insert(target);
+                    if condition(t).is_some() {
+                        leaders.insert(at.wrapping_add(*len as u16));
+                    }
+                }
+            }
         }
     }
     // Then cut the instructions into blocks at the leaders.
@@ -167,6 +199,16 @@ pub fn blocks(
             };
             instructions.push((at, t.clone()));
             let next = at.wrapping_add(len as u16);
+            let through = t
+                .strip_prefix("JP $")
+                .and_then(|_| trampoline(peek, &t[3..]));
+            if t.starts_with("JP (") || through.is_some() {
+                let via = through.unwrap_or_else(|| t.clone());
+                break match returns.get(&at) {
+                    Some(&then) => Exit::Dispatch { via, then },
+                    None => Exit::Computed(via),
+                };
+            }
             let jumps = t.starts_with("JR ") || t.starts_with("JP ") || t.starts_with("DJNZ ");
             if jumps && !t.contains('(') {
                 let target = targets(&t).first().copied().unwrap_or(next);
@@ -177,15 +219,6 @@ pub fn blocks(
                         fall: next,
                     },
                     None => Exit::Jump(target),
-                };
-            }
-            if t.starts_with("JP (") {
-                break match returns.get(&at) {
-                    Some(&then) => Exit::Dispatch {
-                        via: t.clone(),
-                        then,
-                    },
-                    None => Exit::Computed(t.clone()),
                 };
             }
             if t == "RET" || t.starts_with("RETI") || t.starts_with("RETN") {

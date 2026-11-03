@@ -419,3 +419,79 @@ fn a_dispatch_through_a_table_carries_on_where_the_handler_returns() {
     assert!(svg.contains(">back</text>"), "and carries on there: {svg}");
     assert!(svg.contains(">return</text>"), "{svg}");
 }
+
+// Jetpac's main loop pushes where each handler returns to and jumps to a single
+// JP (HL) kept elsewhere, the return is further on than a routine usually
+// reaches, and the walk it loops back to is called on its own as well. Each of
+// those stopped the chart at its first box.
+#[test]
+fn a_dispatch_through_a_trampoline_carries_on_and_loops_back_into_the_walk() {
+    let mut server = Server::new();
+    let program: &[(u16, &[u8])] = &[
+        // $7FF0: LD B,1 : CALL $8002 : CALL $8000 : JR $7FF5
+        (
+            0x7FF0,
+            &[0x06, 0x01, 0xCD, 0x02, 0x80, 0xCD, 0x00, 0x80, 0x18, 0xFB],
+        ),
+        (
+            0x8000,
+            &[
+                0x06, 0x03, // $8000 main: LD B,3
+                0x21, 0x00, 0x88, // $8002 walk: LD HL,$8800
+                0xE5, // PUSH HL
+                0x21, 0x00, 0x90, // LD HL,$9000
+                0xC3, 0x00, 0x91, // JP $9100, which is JP (HL)
+            ],
+        ),
+        (
+            0x8800,
+            &[
+                0x05, // $8800 next: DEC B
+                0xC2, 0x02, 0x80, // JP NZ,$8002
+                0xC9, // RET
+            ],
+        ),
+        (0x9000, &[0xC9]),
+        (0x9100, &[0xE9]),
+    ];
+    for (at, bytes) in program {
+        for (i, b) in bytes.iter().enumerate() {
+            server.session.spec.bus.poke(at + i as u16, *b);
+        }
+    }
+    server.session.spec.cpu.pc = 0x7FF0;
+    server.session.spec.cpu.sp = 0xFF00;
+    label(&mut server, "$8000", "main", "");
+    label(&mut server, "$8002", "walk", "");
+    label(&mut server, "$8800", "next", "");
+    label(&mut server, "$9100", "jp_hl", "");
+    call(&mut server, "watch_routines", Json::obj([])).unwrap();
+    call(
+        &mut server,
+        "run_tstates",
+        Json::obj([("tstates", Json::num(2_000))]),
+    )
+    .unwrap();
+    let path = temp("trampoline.svg");
+    let said = call(
+        &mut server,
+        "export_flowchart",
+        Json::obj([
+            ("address", Json::str("$8000")),
+            ("path", Json::str(path.display().to_string())),
+        ]),
+    )
+    .unwrap();
+    let svg = std::fs::read_to_string(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(
+        svg.contains("on through (HL), which returns to next"),
+        "the jump to jp_hl is the dispatch: {svg}"
+    );
+    assert!(svg.contains(">next</text>"), "and carries on there: {svg}");
+    assert!(
+        !svg.contains(">to walk</text>"),
+        "the jump back to walk is a loop inside the chart: {svg}"
+    );
+    assert!(said.contains(": 4 blocks and 1 decision of main"), "{said}");
+}
