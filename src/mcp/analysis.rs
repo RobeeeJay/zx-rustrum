@@ -812,23 +812,73 @@ pub fn profile(session: &mut Session, args: &Json) -> Result<String, String> {
 
 /// The program in RAM as assembly source that builds back into the same bytes.
 pub fn export_asm(session: &mut Session, args: &Json) -> Result<String, String> {
+    use crate::mcp::listing::{references, seen_line, used_by_line, with_marks};
     let path = crate::mcp::tools::text(args, "path")?;
+    let from = match args.get("from") {
+        Some(_) => addr(args, "from")?,
+        None => crate::asmexport::FROM,
+    };
+    let to = match args.get("to") {
+        Some(_) => addr(args, "to")?,
+        None => 0xFFFF,
+    };
+    if to <= from {
+        return Err("to should be above from".into());
+    }
     let program = session
         .loaded
         .clone()
         .unwrap_or_else(|| "a machine with nothing loaded".into());
-    let out = crate::asmexport::from_machine_knowing(
+    let facts = flag(args, "facts", true);
+    let used_by = if facts {
+        // Callers count wherever they are, not only inside what is written.
+        references(session, 0, 0xFFFF)
+    } else {
+        Default::default()
+    };
+    let session_ref: &Session = session;
+    let above = |at: u16| -> Vec<String> {
+        if !facts {
+            return Vec::new();
+        }
+        let mut lines = Vec::new();
+        if let Some(seen) = seen_line(session_ref, at) {
+            lines.push(format!("seen: {seen}"));
+        }
+        if let Some(from) = used_by.get(&at) {
+            let line = used_by_line(session_ref, at, from);
+            if !line.is_empty() {
+                lines.push(format!("used by: {line}"));
+            }
+        }
+        lines
+    };
+    let marks = |at: u16, length: u8| -> String {
+        if facts {
+            with_marks(session_ref, at, length, String::new())
+        } else {
+            String::new()
+        }
+    };
+    let out = crate::asmexport::from_machine_with(
         &session.spec,
         &session.notes,
         Some(&session.symbols),
         &program,
-        &session.ran_before,
+        crate::asmexport::Extras {
+            ran_before: &session.ran_before,
+            from,
+            to,
+            above: &above,
+            marks: &marks,
+        },
     );
     std::fs::write(&path, &out.text).map_err(|e| format!("{path}: {e}"))?;
     Ok(format!(
-        "Wrote {path}: {} instructions and {} bytes as data. Code is only where it has been \
-         seen to run since this program was started, going back to its saved states included, \
-         and not what only ran under force_branch; run the program further to find more of it.",
+        "Wrote {path}: ${from:04X}-${to:04X}, {} instructions and {} bytes as data. Code is \
+         only where it has been seen to run since this program was started, going back to its \
+         saved states included, and not what only ran under force_branch; run the program \
+         further to find more of it.",
         out.instructions, out.data_bytes
     ))
 }

@@ -459,3 +459,80 @@ fn unexplained_puts_the_biggest_gap_first_and_counts_what_gets_written() {
         "the description is not a comment on an instruction: {report}"
     );
 }
+
+// A conditional jump whose target is a bare number in the export is the reader
+// having to work out what that place is for. Every one should get a name.
+#[test]
+fn unexplained_lists_the_places_jumped_to_that_have_no_name() {
+    let mut server = one_sided();
+    run(&mut server, 500);
+    let range = Json::obj([("from", Json::str("$8000")), ("to", Json::str("$8020"))]);
+    let report = call(&mut server, "unexplained", range.clone()).unwrap();
+    assert!(
+        report
+            .contains("Jumped to but not named: 2 places: $8000 (from $8005), $8009 (from $8003)"),
+        "{report}"
+    );
+    label(&mut server, "$8009", "seven");
+    let report = call(&mut server, "unexplained", range).unwrap();
+    assert!(report.contains("1 places: $8000"), "{report}");
+}
+
+// The file that is meant to be the disassembly is the .asm, so it carries what
+// the listing does, and is only the stretch asked for.
+#[test]
+fn the_assembly_export_covers_the_range_asked_for_with_what_was_measured() {
+    let mut server = start(&[
+        (0x8000, &[0xCD, 0x00, 0x90, 0x18, 0xFB]),
+        (0x9000, &[0x37, 0x32, 0x00, 0x40, 0xD2, 0x00, 0x90, 0xC9]),
+    ]);
+    label(&mut server, "$8000", "main");
+    label(&mut server, "$9000", "draw");
+    call(
+        &mut server,
+        "set_comment",
+        Json::obj([
+            ("address", Json::str("$9000")),
+            ("comment", Json::str("Puts a byte in the corner.")),
+        ]),
+    )
+    .unwrap();
+    run(&mut server, 2_000);
+    let path = std::env::temp_dir().join(format!("zxrs-range-{}.asm", std::process::id()));
+    call(
+        &mut server,
+        "export_asm",
+        Json::obj([
+            ("path", Json::str(path.display().to_string())),
+            ("from", Json::str("$9000")),
+            ("to", Json::str("$9007")),
+        ]),
+    )
+    .unwrap();
+    let asm = std::fs::read_to_string(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(asm.contains("        ORG $9000"), "{asm}");
+    assert!(
+        !asm.contains("CALL draw"),
+        "main is outside the range: {asm}"
+    );
+    assert!(
+        asm.contains("draw:\n; Puts a byte in the corner.\n"),
+        "a label's description goes above it, however short: {asm}"
+    );
+    assert!(
+        asm.trim_end().ends_with("RET"),
+        "nothing after $9007: {asm}"
+    );
+    assert!(
+        asm.contains("; used by: main"),
+        "main is outside the file and calls it all the same: {asm}"
+    );
+    assert!(asm.contains("; seen: called"), "{asm}");
+    assert!(asm.contains("JP NC,draw"), "{asm}");
+    assert!(asm.contains("[never taken]"), "{asm}");
+    assert!(
+        !asm.contains("main EQU"),
+        "nothing in the file names main, so it needs no EQU: {asm}"
+    );
+}

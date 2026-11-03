@@ -50,7 +50,7 @@ pub fn export_listing(session: &mut Session, args: &Json) -> Result<String, Stri
     }
     out.push('\n');
     let used_by = if facts {
-        references(session, from, to)
+        references(session, 0, 0xFFFF)
     } else {
         Default::default()
     };
@@ -193,8 +193,7 @@ pub fn export_listing(session: &mut Session, args: &Json) -> Result<String, Stri
     ))
 }
 
-/// How long a comment can be and still sit beside its instruction.
-const BESIDE: usize = 52;
+use crate::asmexport::BESIDE;
 
 /// What an address is called: a label, then a place in a record, then a name
 /// from a symbol file.
@@ -252,7 +251,7 @@ fn note_above(
     let comment = session.notes.comment(at);
     let beside = label.is_empty() && comment.len() <= BESIDE && !comment.contains('\n');
     if !comment.is_empty() && !beside {
-        for line in wrapped(comment, 76) {
+        for line in crate::asmexport::wrap(comment, 76) {
             out.push_str(&format!("; {line}\n"));
         }
     }
@@ -275,7 +274,7 @@ fn note_above(
 }
 
 /// Which addresses each piece of run code in the range names.
-fn references(session: &Session, from: u16, to: u16) -> BTreeMap<u16, Vec<u16>> {
+pub fn references(session: &Session, from: u16, to: u16) -> BTreeMap<u16, Vec<u16>> {
     let mut found: BTreeMap<u16, Vec<u16>> = BTreeMap::new();
     let mut at = from as u32;
     while at <= to as u32 {
@@ -306,7 +305,7 @@ fn enclosing(session: &Session, at: u16) -> String {
 
 /// What else mentions this address, by routine rather than by instruction. The
 /// routine's own jumps back into itself say nothing about what it is for.
-fn used_by_line(session: &Session, at: u16, from: &[u16]) -> String {
+pub fn used_by_line(session: &Session, at: u16, from: &[u16]) -> String {
     let own = enclosing(session, at);
     let names: BTreeSet<String> = from
         .iter()
@@ -323,7 +322,7 @@ fn used_by_line(session: &Session, at: u16, from: &[u16]) -> String {
 }
 
 /// What the observer measured about a routine, in a line.
-fn seen_line(session: &Session, at: u16) -> Option<String> {
+pub fn seen_line(session: &Session, at: u16) -> Option<String> {
     let observer = &session.spec.bus.observer;
     let routine = observer.routines.get(&at)?;
     if routine.calls == 0 {
@@ -367,7 +366,7 @@ fn seen_line(session: &Session, at: u16) -> Option<String> {
 }
 
 /// What was measured about an instruction, added to what was said about it.
-fn with_marks(session: &Session, at: u16, length: u8, said: String) -> String {
+pub fn with_marks(session: &Session, at: u16, length: u8, said: String) -> String {
     let observer = &session.spec.bus.observer;
     let mut marks = Vec::new();
     if let Some(sides) = observer.flow.conditionals.get(&at) {
@@ -405,25 +404,6 @@ fn with_marks(session: &Session, at: u16, length: u8, said: String) -> String {
     } else {
         format!("{said}  {marks}")
     }
-}
-
-/// Lines no longer than `width`, keeping the line breaks that were written.
-fn wrapped(text: &str, width: usize) -> Vec<String> {
-    let mut lines = Vec::new();
-    for paragraph in text.lines() {
-        let mut line = String::new();
-        for word in paragraph.split_whitespace() {
-            if !line.is_empty() && line.len() + 1 + word.len() > width {
-                lines.push(std::mem::take(&mut line));
-            }
-            if !line.is_empty() {
-                line.push(' ');
-            }
-            line.push_str(word);
-        }
-        lines.push(line);
-    }
-    lines
 }
 
 /// What has been read and not explained yet, biggest first.
@@ -501,6 +481,42 @@ pub fn unexplained(session: &mut Session, args: &Json) -> Result<String, String>
             } else {
                 ", no description"
             },
+        ));
+    }
+    // A jump's target with no name reads as a number in the export, which says
+    // nothing about why it is jumped to.
+    let mut targets: BTreeMap<u16, u16> = BTreeMap::new();
+    let mut pointer = from as u32;
+    while pointer <= to as u32 {
+        let here = pointer as u16;
+        if !session.spec.bus.observer.was_executed(here) {
+            pointer += 1;
+            continue;
+        }
+        let insn = crate::disasm::disasm(&|a| session.spec.bus.peek_raw(a), here);
+        if ["JP ", "JR ", "CALL ", "DJNZ "]
+            .iter()
+            .any(|op| insn.text.starts_with(op))
+        {
+            crate::layout::replace_addresses(&insn.text, &mut |target| {
+                if target >= from && target <= to && session.notes.label(target).is_empty() {
+                    targets.entry(target).or_insert(here);
+                }
+                None
+            });
+        }
+        pointer += insn.len.max(1) as u32;
+    }
+    if !targets.is_empty() {
+        let shown: Vec<String> = targets
+            .iter()
+            .take(limit.max(1) * 4)
+            .map(|(to, from)| format!("${to:04X} (from ${from:04X})"))
+            .collect();
+        out.push_str(&format!(
+            "Jumped to but not named: {} places: {}\n",
+            targets.len(),
+            shown.join(", ")
         ));
     }
     let observer = &session.spec.bus.observer;

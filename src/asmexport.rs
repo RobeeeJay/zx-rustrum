@@ -23,11 +23,40 @@ use crate::disasm;
 use crate::machine::{Model, Spectrum};
 use crate::notes::Notes;
 
-/// Where the file starts: the ROM is below it.
+/// Where the file starts by default: the ROM is below it.
 pub const FROM: u16 = 0x4000;
+
+/// How long a comment can be and still sit beside its instruction.
+pub const BESIDE: usize = 52;
+
+/// Lines no longer than `width`, keeping the line breaks that were written.
+pub fn wrap(text: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    for paragraph in text.lines() {
+        let mut line = String::new();
+        for word in paragraph.split_whitespace() {
+            if !line.is_empty() && line.len() + 1 + word.len() > width {
+                lines.push(std::mem::take(&mut line));
+            }
+            if !line.is_empty() {
+                line.push(' ');
+            }
+            line.push_str(word);
+        }
+        lines.push(line);
+    }
+    lines
+}
 
 /// What goes into the file.
 pub struct Source<'a> {
+    /// The stretch written out; anything named outside it is an EQU.
+    pub from: u16,
+    pub to: u16,
+    /// What was measured about an address, for the lines above its label.
+    pub above: &'a dyn Fn(u16) -> Vec<String>,
+    /// What was measured about an instruction this long, to go beside it.
+    pub marks: &'a dyn Fn(u16, u8) -> String,
     /// The 64K as the machine sees it.
     pub memory: &'a [u8],
     /// Where an opcode has been fetched, address by address.
@@ -303,7 +332,7 @@ pub fn write(src: &Source) -> Exported {
     // Every label the notes have in RAM, by the name the file will use.
     let mut ram_names: BTreeMap<u16, (String, String)> = BTreeMap::new();
     for (addr, label, _) in src.notes.labelled() {
-        if addr >= FROM {
+        if addr >= src.from && addr <= src.to {
             let name = names.claim(label, addr);
             ram_names.insert(addr, (name, label.to_string()));
         }
@@ -313,8 +342,9 @@ pub fn write(src: &Source) -> Exported {
 
     // Lay the memory out as lines.
     let mut lines: Vec<Line> = Vec::new();
-    let mut at: u32 = FROM as u32;
-    while at <= 0xFFFF {
+    let end = src.to as u32;
+    let mut at: u32 = src.from as u32;
+    while at <= end {
         let a = at as u16;
         if let Some(typed) = src.notes.layout().data.get(&a) {
             // The picture goes above a bitmap, so its rows have nothing beside them.
@@ -333,7 +363,7 @@ pub fn write(src: &Source) -> Exported {
         if src.ran[a as usize] {
             let insn = disasm::disasm(&peek, a);
             let len = insn.len.max(1) as u32;
-            let fits = at + len <= 0x10000;
+            let fits = at + len <= end + 1;
             // Another instruction starting inside this one is code that runs
             // two ways; bytes keep both honest. The byte after a DD, ED, CB or
             // FD prefix does not count: the Z80 fetches it as an opcode too,
@@ -361,7 +391,7 @@ pub fn write(src: &Source) -> Exported {
         // or a comment starts or code begins.
         let mut bytes = vec![peek(a)];
         let mut next = at + 1;
-        while next <= 0xFFFF && bytes.len() < 16 {
+        while next <= end && bytes.len() < 16 {
             let b = next as u16;
             if src.ran[b as usize]
                 || labelled(b)
@@ -394,7 +424,7 @@ pub fn write(src: &Source) -> Exported {
     let mut rom_names: BTreeMap<u16, String> = BTreeMap::new();
     let mut named = |text: &str| -> String {
         crate::layout::replace_addresses(text, &mut |value| {
-            if value >= FROM {
+            if value >= src.from && value <= src.to {
                 ram_names.get(&value).map(|(n, _)| n.clone())
             } else if let Some(n) = rom_names.get(&value) {
                 Some(n.clone())
@@ -427,31 +457,44 @@ pub fn write(src: &Source) -> Exported {
     for line in &src.header {
         out.push_str(&format!("; {line}\n").replace("; \n", ";\n"));
     }
-    out.push_str(
+    out.push_str(&format!(
         ";\n\
-         ; $0000-$3FFF is the ROM and is not in this file: calls into it are kept as\n\
-         ; addresses, with the ROM's own names as EQUs where they are known.\n\
+         ; This file is ${:04X}-${:04X}. Anything it names outside that, the ROM\n\
+         ; included, is an EQU with the address, under the name the notes or the\n\
+         ; ROM's symbols give it.\n\
          ; Code is what was seen to run since this program was started, and\n\
          ; everything else is DEFB. Undocumented instructions, and documented ones\n\
          ; with more than one encoding, are DEFB with the instruction beside them,\n\
          ; so any assembler gives back the same bytes.\n\
+         ; \"seen:\" and \"used by:\" lines and [square brackets] were measured, not\n\
+         ; written by anybody.\n\
          ; To build it: sjasmplus --raw=program.bin this.asm, or pasmo this.asm\n\
-         ; program.bin. Either gives the 49,152 bytes from $4000.\n\n",
-    );
+         ; program.bin. Either gives the {} bytes from ${:04X}.\n\n",
+        src.from,
+        src.to,
+        src.to as u32 - src.from as u32 + 1,
+        src.from
+    ));
     for (addr, name) in &rom_names {
-        out.push_str(&format!("{name} EQU ${addr:04X}   ; in the ROM\n"));
+        let place = if *addr < 0x4000 {
+            "in the ROM"
+        } else {
+            "outside this file"
+        };
+        out.push_str(&format!("{name} EQU ${addr:04X}   ; {place}\n"));
     }
     for (addr, name) in &equ_inside {
         out.push_str(&format!(
             "{name} EQU ${addr:04X}   ; inside an instruction or a run of bytes below\n"
         ));
     }
-    out.push_str("\n        ORG $4000\n");
+    out.push_str(&format!("\n        ORG ${:04X}\n", src.from));
 
     let mut instructions = 0;
     let mut data_bytes = 0;
     for (line, body) in lines.iter().zip(bodies) {
-        if let Some((name, original)) = ram_names.get(&line.at) {
+        let labelled = ram_names.get(&line.at);
+        if let Some((name, original)) = labelled {
             // Said when the name had to change, so the notes can be matched up.
             if original == name {
                 out.push_str(&format!("\n{name}:\n"));
@@ -459,28 +502,47 @@ pub fn write(src: &Source) -> Exported {
                 out.push_str(&format!("\n{name}:   ; labelled \"{original}\"\n"));
             }
         }
-        // A comment of several lines goes above its line; one line goes
-        // beside it.
+        // A label's description goes above it, as does anything too long to
+        // read at the end of a line of code.
         let comment = src.notes.comment(line.at).trim().to_string();
         let guess = if src.notes.comment_is_auto(line.at) {
             "guess: "
         } else {
             ""
         };
-        if let Some(typed) = src.notes.layout().data.get(&line.at) {
-            for row in crate::layout::picture(typed, &peek) {
-                out.push_str(format!("        ; {row}").trim_end());
-                out.push('\n');
-            }
-        }
+        let lead = if labelled.is_some() { "" } else { "        " };
         let mut beside: Vec<String> = Vec::new();
-        if comment.contains('\n') {
-            for (i, part) in comment.lines().enumerate() {
-                let lead = if i == 0 { guess } else { "" };
-                out.push_str(&format!("        ; {lead}{part}\n"));
+        if labelled.is_some() || comment.contains('\n') || comment.len() > BESIDE {
+            for (i, part) in wrap(&format!("{guess}{comment}"), 76).iter().enumerate() {
+                if !part.is_empty() || i > 0 {
+                    out.push_str(format!("{lead}; {part}").trim_end());
+                    out.push('\n');
+                }
             }
         } else if !comment.is_empty() {
             beside.push(format!("{guess}{comment}"));
+        }
+        if labelled.is_some() {
+            for fact in (src.above)(line.at) {
+                out.push_str(&format!("; {fact}\n"));
+            }
+        }
+        if let Some(typed) = src.notes.layout().data.get(&line.at) {
+            for row in crate::layout::picture(typed, &peek) {
+                out.push_str(format!("{lead}; {row}").trim_end());
+                out.push('\n');
+            }
+        }
+        let length = match &line.body {
+            Body::Code(_) => disasm::disasm(&peek, line.at).len,
+            Body::Data(bytes, Some(_)) => bytes.len() as u8,
+            _ => 0,
+        };
+        if length > 0 {
+            let marks = (src.marks)(line.at, length);
+            if !marks.is_empty() {
+                beside.push(marks);
+            }
         }
         match &line.body {
             Body::Code(text) => {
@@ -618,18 +680,41 @@ pub fn from_machine(
     symbols: Option<&crate::autodoc::Symbols>,
     program: &str,
 ) -> Exported {
-    from_machine_knowing(spec, notes, symbols, program, &[])
+    from_machine_with(spec, notes, symbols, program, Extras::default())
 }
 
-/// As `from_machine`, with what else is known to have run, by physical location
-/// as the tracker keeps it.
-pub fn from_machine_knowing(
+/// What an export can be given beyond the machine and its notes.
+pub struct Extras<'a> {
+    /// What else is known to have run, by physical location as the tracker
+    /// keeps it.
+    pub ran_before: &'a [bool],
+    pub from: u16,
+    pub to: u16,
+    pub above: &'a dyn Fn(u16) -> Vec<String>,
+    pub marks: &'a dyn Fn(u16, u8) -> String,
+}
+
+impl Default for Extras<'_> {
+    fn default() -> Self {
+        Extras {
+            ran_before: &[],
+            from: FROM,
+            to: 0xFFFF,
+            above: &|_| Vec::new(),
+            marks: &|_, _| String::new(),
+        }
+    }
+}
+
+/// As `from_machine`, with more to go on.
+pub fn from_machine_with(
     spec: &Spectrum,
     notes: &Notes,
     symbols: Option<&crate::autodoc::Symbols>,
     program: &str,
-    ran_before: &[bool],
+    extras: Extras,
 ) -> Exported {
+    let ran_before = extras.ran_before;
     let memory: Vec<u8> = (0..=0xFFFFu16).map(|a| spec.bus.peek_raw(a)).collect();
     let ran: Vec<bool> = (0..=0xFFFFu16)
         .map(|a| {
@@ -647,6 +732,10 @@ pub fn from_machine_knowing(
             .map(|(name, _)| name.to_string())
     };
     write(&Source {
+        from: extras.from,
+        to: extras.to,
+        above: extras.above,
+        marks: extras.marks,
         memory: &memory,
         ran: &ran,
         notes,

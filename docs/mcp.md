@@ -249,7 +249,11 @@ back.
 
 `export_asm` writes the program in RAM as assembly source that assembles back into
 the same bytes: code where it has run, DEFB elsewhere, every label and comment,
-and the ROMs it ran against named by CRC32 in its header.
+and the ROMs it ran against named by CRC32 in its header. `from` and `to` narrow it
+to the program itself, and anything it names outside that becomes an EQU. It carries
+what the listing does, as comments: descriptions above their labels, the pictures,
+the `seen:` and `used by:` lines and the marks. So it can be the disassembly and not
+only something to build from.
 
 `export_listing` writes the whole annotated disassembly to a file — the thing
 being built. What ran while watching is disassembled; what did not is left as

@@ -953,7 +953,18 @@ fn own_tools() -> Vec<Json> {
              into the same bytes: instructions where code has been seen to run, DEFB \
              elsewhere, with every label and comment from the notes. The ROMs it was built \
              against are named in its header by CRC32 and left out.",
-            [("path", prop("string", "where to write the .asm file"))],
+            [
+                ("path", prop("string", "where to write the .asm file")),
+                ("from", address("lowest address (default $4000)")),
+                ("to", address("highest address (default $FFFF)")),
+                (
+                    "facts",
+                    prop(
+                        "boolean",
+                        "the measured lines and marks, as in export_listing (default true)",
+                    ),
+                ),
+            ],
             &["path"],
         ),
         schema_tool(
