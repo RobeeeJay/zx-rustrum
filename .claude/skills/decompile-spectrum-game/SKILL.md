@@ -217,7 +217,7 @@ makes the final export reproducible.
 
 ## 7. The pictures that go with it
 
-Two more things belong beside every finished `.asm`, made from the same session:
+Three more things belong beside every finished `.asm`, made from the same session:
 
 - **The call graph:** `export_call_graph` to `disassembly/<name>.callgraph.svg`, with
   `from` and `to` set to the game's code so the ROM's tape loading stays out, while
@@ -228,6 +228,20 @@ Two more things belong beside every finished `.asm`, made from the same session:
   a jump table are not in it, and a routine that borrows the stack pointer, as
   sprite drawers do, can make calls look as if they came from it. Say so if the game
   relies on either, rather than letting the picture stand for the whole program.
+- **Flow charts of the routines that matter:** `export_flowchart` to
+  `disassembly/<name> flowcharts/<label>.svg`, one per routine, at least the main
+  loop and its per-frame pass, the player's handler, one enemy's handler, the room or
+  level builder if there is one, and the sprite drawer. This is the picture to read
+  the game's loop from, since the call graph leaves the loop out. Each chart is the
+  code that ran, in address order, with the decisions as diamonds counted each way
+  and a way never taken dashed, so make them while the observer holds the whole run
+  and after the naming, as for the call graph. A dispatch that pushes a return
+  address and jumps through a register (`LD HL,next` `PUSH HL` ... `JP (HL)`, or a
+  `JP` to a lone `JP (HL)` kept elsewhere) is drawn as a call that comes back to
+  `next`, however far away `next` is. A chart stops where the code jumps into a
+  routine somebody calls, so if a main loop is cut short, chart it from the start
+  of the loop, not from the set-up before it, or chart the piece it jumps to on
+  its own.
 - **The sprites:** `export_sprites` to `disassembly/<name> sprites/`, from the state
   the `.asm` was exported from, so the pictures are the bytes in the file. One PNG
   per bitmap typed with `set_data`, named by its label: ink black, paper white,
@@ -235,7 +249,7 @@ Two more things belong beside every finished `.asm`, made from the same session:
   they are where you can, since the file name is the label; a sprite numbered by its
   type is better than none, but it is not a description.
 
-Look at both before calling them done: render the SVG (on macOS, `qlmanage -t -s 1400
+Look at all three before calling them done: render the SVG (on macOS, `qlmanage -t -s 1400
 -o DIR FILE.svg`) and open a few PNGs. A sprite that comes out as noise means the
 format, the width or the mask is wrong.
 
@@ -246,6 +260,6 @@ round trip and the tape comparison showed; what is a reading rather than a
 measurement; what was corrected along the way; and what is still unknown.
 
 The finished `.asm` goes in `disassembly/`, under the tape's name, with its call
-graph and its sprites beside it. Copyright stays
+graph, its flow charts and its sprites beside it. Copyright stays
 with the game's owners, so that directory is gitignored like `tapes/`, and nothing in
 it is published or committed.
