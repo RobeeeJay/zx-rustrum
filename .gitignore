@@ -19,3 +19,6 @@ snapshots/
 
 # Model answers, listings and traces: generated, and often large.
 out/
+
+# Python leaves these beside any script it imports.
+__pycache__/

@@ -103,6 +103,10 @@ set of decisions rather than a manual:
 - [`docs/missing.md`](docs/missing.md) — what other emulators have that this
   does not, checked against the source rather than remembered. A description of
   the gap and not a plan: nothing in it is promised.
+- [`.claude/skills/decompile-spectrum-game/`](.claude/skills/decompile-spectrum-game/SKILL.md)
+  — how to take a game from tape to a documented `.asm` that rebuilds it, with
+  the MCP server: the order that worked on Jetpac, the scripts it used, and what
+  cost time.
 - [`docs/agent-disassembly.md`](docs/agent-disassembly.md) — what a language
   model driving the MCP server would still need to disassemble a game fully
   and explain it. Also a description of the gap, not a plan.
