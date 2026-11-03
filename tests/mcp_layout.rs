@@ -518,3 +518,30 @@ fn the_assembly_export_keeps_typed_data_and_leaves_displacements_as_numbers() {
         "the number stays and the name is beside it: {asm}"
     );
 }
+
+// Jetpac's sprite table was typed eight words too long, over the first sixteen
+// bytes of the routine after it. The bytes still came out right, so no check on
+// the export could catch it: the listing simply showed that code as DEFW.
+#[test]
+fn saying_that_code_which_has_run_is_data_draws_a_warning() {
+    let mut server = Server::new();
+    // $8000: a two-word table, then NOP : JR $8004.
+    poke(&mut server, "$8000", &[1, 2, 3, 4, 0x00, 0x18, 0xFE]);
+    call(&mut server, "watch_routines", Json::obj([])).unwrap();
+    server.session.spec.cpu.pc = 0x8004;
+    call(&mut server, "step", Json::obj([("count", Json::num(2))])).unwrap();
+    let words = |length: i32| {
+        Json::obj([
+            ("address", Json::str("$8000")),
+            ("kind", Json::str("words")),
+            ("length", Json::num(length)),
+        ])
+    };
+    let right = call(&mut server, "set_data", words(2)).unwrap();
+    assert!(!right.contains("have run"), "{right}");
+    let wrong = call(&mut server, "set_data", words(3)).unwrap();
+    assert!(
+        wrong.contains("2 of its bytes have run as code, $8004 to $8005"),
+        "{wrong}"
+    );
+}

@@ -44,7 +44,25 @@ pub fn set_data(session: &mut Session, args: &Json) -> Result<String, String> {
             ))
         }
     }
-    Ok(format!("${at:04X} is {kind} now."))
+    let mut said = format!("${at:04X} is {kind} now.");
+    // A claim running into code is the easiest mistake to make here and the
+    // hardest to see afterwards: the bytes still come out right, so nothing
+    // fails, and the code reads as data.
+    if let Some(typed) = session.notes.layout().data.get(&at) {
+        let observer = &session.spec.bus.observer;
+        let ran: Vec<u16> = (0..typed.length)
+            .map(|i| at.wrapping_add(i))
+            .filter(|a| observer.was_executed(*a))
+            .collect();
+        if let (Some(first), Some(last)) = (ran.first(), ran.last()) {
+            said.push_str(&format!(
+                " But {} of its bytes have run as code, ${first:04X} to ${last:04X}: \
+                 the stretch is probably shorter than that.",
+                ran.len()
+            ));
+        }
+    }
+    Ok(said)
 }
 
 pub fn define_struct(session: &mut Session, args: &Json) -> Result<String, String> {
