@@ -308,7 +308,11 @@ pub fn export_flowchart(session: &mut Session, args: &Json) -> Result<String, St
                 }
             }
             if out.is_empty() || out.iter().all(|(_, title)| *title) {
-                out.push((format!("{} instructions", b.instructions.len()), false));
+                let n = b.instructions.len();
+                out.push((
+                    format!("{n} instruction{}", if n == 1 { "" } else { "s" }),
+                    false,
+                ));
             }
             out
         })
@@ -316,7 +320,7 @@ pub fn export_flowchart(session: &mut Session, args: &Json) -> Result<String, St
 
     // Down the page: each block, then its decision if it has one.
     let mut tops = Vec::new();
-    let mut y = 74.0;
+    let mut y = 88.0;
     for (i, b) in found.iter().enumerate() {
         let h = 12.0 + LINE * lines[i].len() as f32;
         let decision = matches!(b.exit, Exit::Branch { .. } | Exit::ReturnIf { .. });
@@ -426,13 +430,29 @@ pub fn export_flowchart(session: &mut Session, args: &Json) -> Result<String, St
          markerHeight=\"7\" orient=\"auto-start-reverse\"><path d=\"M0,0 L10,5 L0,10 z\" fill=\"#3a6ea5\"/>\
          </marker></defs>\n\
          <rect width=\"100%\" height=\"100%\" fill=\"#ffffff\"/>\n\
-         <text x=\"24\" y=\"26\" font-size=\"16\" font-weight=\"bold\">{} (${entry:04X})</text>\n\
-         <text x=\"24\" y=\"46\" font-size=\"11\" fill=\"#555\">In address order, from the code \
-         that ran. Jumps forward run down the right, loops back up the left; the counts are how \
-         often each way was taken while watched, and a way never taken is dashed.{}</text>\n",
+         <text x=\"24\" y=\"26\" font-size=\"16\" font-weight=\"bold\">{} (${entry:04X})</text>\n",
         escape(&title),
-        if cut { " Cut short: more blocks than asked for." } else { "" }
     );
+    let said = format!(
+        "In address order, from the code that ran. Jumps forward run down the right, loops \
+         back up the left; the counts are how often each way was taken while watched, and a \
+         way never taken is dashed.{}",
+        if cut {
+            " Cut short: more blocks than asked for."
+        } else {
+            ""
+        }
+    );
+    for (i, line) in crate::asmexport::wrap(&said, ((width - 48.0) / 6.6) as usize)
+        .iter()
+        .enumerate()
+    {
+        svg.push_str(&format!(
+            "<text x=\"24\" y=\"{:.0}\" font-size=\"11\" fill=\"#555\">{}</text>\n",
+            44.0 + 14.0 * i as f32,
+            escape(line)
+        ));
+    }
     for (i, b) in found.iter().enumerate() {
         let (top, h, decision) = tops[i];
         svg.push_str(&format!(
