@@ -115,6 +115,51 @@ fn the_call_graph_is_an_svg_with_the_routines_named_and_described() {
     );
 }
 
+// A tape's loading runs the ROM's routines among the game's own; a graph of the
+// game wants only the game's.
+#[test]
+fn a_call_graph_can_keep_to_a_range_of_addresses() {
+    let mut server = Server::new();
+    let program: &[(u16, &[u8])] = &[
+        (0x7FF0, &[0xCD, 0x00, 0x80, 0x18, 0xFB]),
+        (0x8000, &[0xCD, 0x00, 0x90, 0xCD, 0x00, 0x91, 0xC9]),
+        (0x9000, &[0xCD, 0x00, 0x91, 0xC9]),
+        (0x9100, &[0xC9]),
+    ];
+    for (at, bytes) in program {
+        for (i, b) in bytes.iter().enumerate() {
+            server.session.spec.bus.poke(at + i as u16, *b);
+        }
+    }
+    server.session.spec.cpu.pc = 0x7FF0;
+    server.session.spec.cpu.sp = 0xFF00;
+    call(&mut server, "watch_routines", Json::obj([])).unwrap();
+    call(
+        &mut server,
+        "run_tstates",
+        Json::obj([("tstates", Json::num(3_000))]),
+    )
+    .unwrap();
+    let path = temp("range.svg");
+    call(
+        &mut server,
+        "export_call_graph",
+        Json::obj([
+            ("path", Json::str(path.display().to_string())),
+            ("from", Json::str("$9000")),
+        ]),
+    )
+    .unwrap();
+    let svg = std::fs::read_to_string(&path).unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(!svg.contains(">$8000</text>"), "outside the range: {svg}");
+    assert_eq!(
+        svg.matches("class=\"call\"").count(),
+        1,
+        "only $9000 to $9100"
+    );
+}
+
 #[test]
 fn a_call_graph_needs_something_watched() {
     let mut server = Server::new();

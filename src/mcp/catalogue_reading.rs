@@ -19,6 +19,11 @@ pub fn tools() -> Vec<Json> {
                     "limit",
                     prop("integer", "how many routines, 2-200 (default 60)"),
                 ),
+                (
+                    "from",
+                    address("only routines from here (default $0000), such as the program's own"),
+                ),
+                ("to", address("only routines up to here (default $FFFF)")),
             ],
             &["path"],
         ),

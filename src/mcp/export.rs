@@ -35,6 +35,15 @@ fn first_sentence(comment: &str) -> &str {
 pub fn export_call_graph(session: &mut Session, args: &Json) -> Result<String, String> {
     let path = text(args, "path")?;
     let most = count(args, "limit", 60)?.clamp(2, 200) as usize;
+    let from = match args.get("from") {
+        Some(_) => crate::mcp::tools::addr(args, "from")?,
+        None => 0,
+    };
+    let to = match args.get("to") {
+        Some(_) => crate::mcp::tools::addr(args, "to")?,
+        None => 0xFFFF,
+    };
+    let inside = |a: u16| a >= from && a <= to;
     let observer = &session.spec.bus.observer;
     if observer.edges.is_empty() {
         return Err("no calls have been watched: call watch_routines, then run the machine".into());
@@ -42,13 +51,20 @@ pub fn export_call_graph(session: &mut Session, args: &Json) -> Result<String, S
     let edges: BTreeMap<(u16, u16), u32> = observer
         .edges
         .iter()
+        .filter(|((caller, callee), _)| inside(*caller) && inside(*callee))
         .map(|(pair, edge)| (*pair, edge.calls))
         .collect();
+    if edges.is_empty() {
+        return Err(format!(
+            "no calls were watched between ${from:04X} and ${to:04X}"
+        ));
+    }
     // Work done by instructions run, the routine's own and its callees': what
     // a reader wants to see first is where the time goes.
     let work: BTreeMap<u16, u64> = observer
         .routines
         .iter()
+        .filter(|(at, _)| inside(**at))
         .map(|(at, seen)| (*at, seen.instructions))
         .collect();
     let graph = crate::callgraph::layout_keeping(&edges, &work, most);
@@ -125,12 +141,9 @@ pub fn export_call_graph(session: &mut Session, args: &Json) -> Result<String, S
     }
     for node in &graph.nodes {
         let (x, y) = at(node.layer, node.row, top);
-        let label = session.notes.label(node.entry);
-        let name = if label.is_empty() {
-            format!("${:04X}", node.entry)
-        } else {
-            label.to_string()
-        };
+        // The notes' name, or the ROM's from a symbol file, as the listing has it.
+        let name = crate::mcp::listing::name_of(session, node.entry)
+            .unwrap_or_else(|| format!("${:04X}", node.entry));
         let calls = observer.routines.get(&node.entry).map_or(0, |r| r.calls);
         let shade = 245.0 - 110.0 * node.weight;
         let tip = first_sentence(session.notes.comment(node.entry));
