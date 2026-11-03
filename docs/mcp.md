@@ -285,6 +285,20 @@ bytes rather than turned into instructions nobody executed. Notes go to
 readable and diffable without the emulator. A guess made by AutoDoc is marked
 as a guess and never overwrites something typed.
 
+**Placing it among other games.** `fingerprint`, `lineage`, `export_lineage`.
+
+`fingerprint` hashes the code that has run since the game was loaded, in fragments
+of five instructions with every number blanked, and writes `<name>.lineage.txt`
+beside the tape. The ROM's own fragments and the tape loader are left out. Run the
+game and play it first: what never ran isn't in it. Authors come from ZXDB, through
+`zxdb-games.txt` in the preferences directory, which `tools/zxdb-games.py` writes.
+
+`lineage` draws every fingerprinted game as a family tree, oldest first: each game
+hangs off the earlier game holding the most of its code, with how much. With `game`,
+it also shows that game's routines found in an earlier game, and who is suspected of
+writing them. `export_lineage` writes the same as an HTML page. What it measures,
+and what it was checked against, is in [`lineage.md`](lineage.md).
+
 ## Things worth knowing
 
 **A machine with no ROM looks like a game that crashed.** A fresh `Spectrum`

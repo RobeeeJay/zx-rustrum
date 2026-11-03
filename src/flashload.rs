@@ -141,12 +141,18 @@ const SAMPLER_T: u64 = 54;
 /// nothing but would match the wrong thing if a longer one were skipped.
 pub fn sampler(spec: &Spectrum) -> Option<&'static str> {
     use crate::z80::Bus;
-    let at = spec.cpu.pc;
+    sampler_at(&|a| spec.bus.peek(a), spec.cpu.pc)
+}
+
+/// Which loader's sampling loop starts at this address, if any — the same
+/// test as `sampler`, anywhere in memory, so a loader can be recognised long
+/// after it has finished.
+pub fn sampler_at<F: Fn(u16) -> u8>(peek: &F, at: u16) -> Option<&'static str> {
     CORES
         .iter()
         .find(|(_, pattern)| {
             pattern.iter().enumerate().all(|(offset, byte)| {
-                *byte == ANY || spec.bus.peek(at.wrapping_add(offset as u16)) as u16 == *byte
+                *byte == ANY || peek(at.wrapping_add(offset as u16)) as u16 == *byte
             })
         })
         .map(|(name, _)| *name)

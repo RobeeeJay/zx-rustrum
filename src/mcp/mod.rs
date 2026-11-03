@@ -18,6 +18,7 @@ pub mod flowchart;
 pub mod input;
 pub mod json;
 pub mod layout;
+pub mod lineage;
 pub mod listing;
 pub mod looking;
 pub mod memory;

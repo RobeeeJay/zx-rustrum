@@ -107,6 +107,9 @@ set of decisions rather than a manual:
   — how to take a game from tape to a documented `.asm` that rebuilds it, with
   the MCP server: the order that worked on Jetpac, the scripts it used, and what
   cost time.
+- [`docs/lineage.md`](docs/lineage.md) — fingerprinting games' code and
+  drawing which earlier games hold it: what is measured, the families it was
+  checked against, and the "known" relationship that turned out not to be one.
 - [`docs/agent-disassembly.md`](docs/agent-disassembly.md) — what a language
   model driving the MCP server would still need to disassemble a game fully
   and explain it. Also a description of the gap, not a plan.
@@ -676,6 +679,21 @@ crate in the lock file, so `src/mcp/json.rs` implements what JSON-RPC uses and
 no more, the same bargain as `src/svg.rs`. What is deliberately not exposed —
 and why it would be worth exposing — is at the end of
 [`docs/mcp.md`](docs/mcp.md).
+
+**Lineage compares code that ran, with every number blanked.** A fingerprint
+(`src/lineage.rs`) is the run code cut into hashed fragments of five
+instructions, each reduced to its shape — `LD H,$B7` is `LD H,n` — because a
+routine taken into another game moves with its tables and keeps none of its
+numbers; blanking only the addresses held Saboteur's sequel at 8% instead of
+15%. The ROM's fragments are dropped, and so is the loader, grown outward from
+its sampling loop for as long as its runs are packed together: a fixed reach
+either side left the end of Speedlock in and made Head over Heels and RoboCop
+look 17% related. Skool Daze and Contact Sam Cruise, said everywhere to share an
+engine, share 1.7% of their code in Richard Dymond's full disassemblies against
+Manic Miner and Jet Set Willy's 30% — the design was shared, not the code, and
+fragments cannot see a rewrite. Authors come from ZXDB through
+`tools/zxdb-games.py`, generated into the preferences directory and not
+committed; a suspected author is a guess and is marked as one.
 
 **A machine with no ROM in it looks like a game that crashed.** `SpectrumBus`
 fills its ROM space with `$FF`, which is `RST $38` over and over: the machine
