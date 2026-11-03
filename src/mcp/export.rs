@@ -53,14 +53,14 @@ pub fn export_call_graph(session: &mut Session, args: &Json) -> Result<String, S
         .collect();
     let graph = crate::callgraph::layout_keeping(&edges, &work, most);
 
-    let at = |layer: usize, row: usize| {
+    let at = |layer: usize, row: usize, top: f32| {
         (
             MARGIN + layer as f32 * (NODE_W + LAYER_GAP),
-            TOP + row as f32 * (NODE_H + ROW_GAP),
+            top + row as f32 * (NODE_H + ROW_GAP),
         )
     };
     let width = MARGIN * 2.0 + graph.layers as f32 * (NODE_W + LAYER_GAP) - LAYER_GAP;
-    let height = TOP + graph.widest as f32 * (NODE_H + ROW_GAP) + MARGIN + 40.0;
+    let height = TOP + graph.widest as f32 * (NODE_H + ROW_GAP) + MARGIN + 140.0;
     let program = session
         .loaded
         .clone()
@@ -69,21 +69,36 @@ pub fn export_call_graph(session: &mut Session, args: &Json) -> Result<String, S
         "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"{width:.0}\" height=\"{height:.0}\" \
          viewBox=\"0 0 {width:.0} {height:.0}\" font-family=\"Menlo, Consolas, monospace\">\n\
          <rect width=\"100%\" height=\"100%\" fill=\"#ffffff\"/>\n\
-         <text x=\"{MARGIN}\" y=\"26\" font-size=\"15\" font-weight=\"bold\">{}</text>\n\
-         <text x=\"{MARGIN}\" y=\"44\" font-size=\"11\" fill=\"#555\">Who called whom over {} \
-         frames watched, the busiest {} routines by instructions run. Read left to right; a \
-         thicker line is a call made more often; a dashed line goes back to something already \
-         reached, which is a loop. Hover over a routine for its description.</text>\n",
+         <text x=\"{MARGIN}\" y=\"24\" font-size=\"15\" font-weight=\"bold\">{}</text>\n",
         escape(&program),
-        observer.frames,
-        graph.nodes.len(),
     );
+    // What the picture is and is not, in lines short enough for a narrow graph.
+    let said = format!(
+        "Who called whom over {} frames watched: the busiest {} routines by instructions run, \
+         left to right. A thicker line is a call made more often; a dashed one goes back to \
+         something already reached, which is a loop. Hover over a routine for its description. \
+         Only calls are drawn: code reached by a jump, such as handlers jumped to through a \
+         table, is not, and a routine that moves the stack pointer can make calls look as if \
+         they came from it.",
+        observer.frames,
+        graph.nodes.len()
+    );
+    let per_line = ((width - MARGIN * 2.0) / 6.6).max(40.0) as usize;
+    let lines = crate::asmexport::wrap(&said, per_line);
+    for (i, line) in lines.iter().enumerate() {
+        svg.push_str(&format!(
+            "<text x=\"{MARGIN}\" y=\"{:.0}\" font-size=\"11\" fill=\"#555\">{}</text>\n",
+            42.0 + 14.0 * i as f32,
+            escape(line)
+        ));
+    }
+    let top = TOP + 14.0 * lines.len().saturating_sub(1) as f32;
     for link in &graph.links {
         let (Some(from), Some(to)) = (graph.node(link.from), graph.node(link.to)) else {
             continue;
         };
-        let (fx, fy) = at(from.layer, from.row);
-        let (tx, ty) = at(to.layer, to.row);
+        let (fx, fy) = at(from.layer, from.row, top);
+        let (tx, ty) = at(to.layer, to.row, top);
         let stroke = 1.0 + 4.0 * link.weight;
         let (x1, y1) = (fx + NODE_W, fy + NODE_H / 2.0);
         let (x2, y2) = (tx, ty + NODE_H / 2.0);
@@ -109,7 +124,7 @@ pub fn export_call_graph(session: &mut Session, args: &Json) -> Result<String, S
         ));
     }
     for node in &graph.nodes {
-        let (x, y) = at(node.layer, node.row);
+        let (x, y) = at(node.layer, node.row, top);
         let label = session.notes.label(node.entry);
         let name = if label.is_empty() {
             format!("${:04X}", node.entry)
