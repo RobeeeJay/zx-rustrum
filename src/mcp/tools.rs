@@ -730,6 +730,21 @@ impl Session {
         Ok(out)
     }
 
+    /// Let go of a recording before running the machine any other way. While
+    /// one is loaded a frame ends only where the recording says and every IN
+    /// is answered from it, so running on the machine's own clock with it still
+    /// in place ran for ever inside one frame with no interrupt, reading input
+    /// meant for somewhere else — and poking a game after its recording looked
+    /// like the game ignoring the pokes. Says so, if there was one to let go.
+    pub(crate) fn let_go_of_recording(&mut self) -> &'static str {
+        if self.rzx.take().is_none() {
+            return "";
+        }
+        self.spec.bus.playback = None;
+        "The recording is let go: the machine runs on its own clock and keyboard from \
+         here, and load_recording starts it again.\n"
+    }
+
     /// What says the machine has left the recorded path, if anything has.
     fn drift(&self) -> String {
         match &self.spec.bus.playback {

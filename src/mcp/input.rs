@@ -31,6 +31,7 @@ pub fn press_keys(session: &mut Session, args: &Json) -> Result<String, String> 
     let after = count(args, "then_frames", 10)?.min(600);
 
     let mut pressed = Vec::new();
+    let note = session.let_go_of_recording();
     for name in &names {
         pressed.push(key_named(name, session.spec.bus.model)?);
     }
@@ -47,7 +48,7 @@ pub fn press_keys(session: &mut Session, args: &Json) -> Result<String, String> 
         session.spec.run(FRAME_T);
     }
     Ok(format!(
-        "Held {} for {hold} frames, then ran {after} more. {}",
+        "{note}Held {} for {hold} frames, then ran {after} more. {}",
         names.join(" + "),
         session.registers()
     ))
@@ -64,6 +65,7 @@ pub fn press_keys(session: &mut Session, args: &Json) -> Result<String, String> 
 pub fn type_text(session: &mut Session, args: &Json) -> Result<String, String> {
     let line = text(args, "text")?;
     let hold = count(args, "frames", 6)?.clamp(1, 60);
+    let note = session.let_go_of_recording();
 
     for step in plan(&line)? {
         // A keyword only exists in the mode the machine is in. K mode is the
@@ -112,7 +114,7 @@ pub fn type_text(session: &mut Session, args: &Json) -> Result<String, String> {
             session.spec.run(FRAME_T);
         }
     }
-    Ok(format!("Typed {line:?}. {}", session.registers()))
+    Ok(format!("{note}Typed {line:?}. {}", session.registers()))
 }
 
 /// What mode a piece of text needs the machine to be in.

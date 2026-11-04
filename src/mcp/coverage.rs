@@ -254,6 +254,9 @@ fn run_forced(
             .clone();
         crate::snapshot::load_sna(&mut session.spec, &data)?;
     }
+    // The fork runs on its own clock, as run_frames does; the recording stays
+    // with the real machine, which is put back afterwards.
+    session.spec.bus.playback = None;
     if session.spec.cpu.pc != at {
         match crate::mcp::control::run_to(session, &[at], reach)? {
             Stop::Breakpoint(pc) if pc == at => {}

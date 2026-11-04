@@ -926,6 +926,26 @@ fn a_recording_can_be_played_and_sought() {
     )
     .unwrap();
     assert_eq!(server.session.rzx.as_ref().unwrap().frame, 12);
+
+    // Running the machine any other way lets go of the recording first.
+    // With it still in place a frame only ended where the recording said,
+    // so run_frames ran for ever inside one frame with no interrupt and
+    // reported none run — which made every poke after a recording look as
+    // if the game had ignored it.
+    let text = call(
+        &mut server,
+        "run_frames",
+        Json::obj([("frames", Json::num(5))]),
+    )
+    .unwrap();
+    assert!(
+        text.contains("let go") && text.contains("Ran 5 frames"),
+        "run_frames after a recording should let it go and run five frames: {text}"
+    );
+    assert!(
+        server.session.rzx.is_none(),
+        "the recording should be let go"
+    );
 }
 
 /// The +3's drive through the server: what goes in, what is on it, and what

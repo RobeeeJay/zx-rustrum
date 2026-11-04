@@ -34,6 +34,7 @@ pub fn step(session: &mut Session, args: &Json) -> Result<String, String> {
 
 pub fn run_frames(session: &mut Session, args: &Json) -> Result<String, String> {
     let frames = count(args, "frames", 1)?.min(RUN_LIMIT_FRAMES * 10);
+    let note = session.let_go_of_recording();
     let before = session.spec.bus.frame;
     let mut stopped = None;
     for _ in 0..frames {
@@ -43,15 +44,12 @@ pub fn run_frames(session: &mut Session, args: &Json) -> Result<String, String> 
             break;
         }
     }
-    Ok(after_running(
-        session,
-        session.spec.bus.frame - before,
-        stopped,
-    ))
+    Ok(note.to_string() + &after_running(session, session.spec.bus.frame - before, stopped))
 }
 
 pub fn run_tstates(session: &mut Session, args: &Json) -> Result<String, String> {
     let want = count(args, "tstates", 1)?;
+    let note = session.let_go_of_recording();
     let before = session.spec.bus.total_t();
     let mut left = want;
     let mut stopped = None;
@@ -66,7 +64,7 @@ pub fn run_tstates(session: &mut Session, args: &Json) -> Result<String, String>
         left = want.saturating_sub(done);
     }
     let ran = session.spec.bus.total_t() - before;
-    let mut out = format!("Ran {ran} T-states. {}", session.registers());
+    let mut out = format!("{note}Ran {ran} T-states. {}", session.registers());
     if let Some(stop) = stopped {
         out.push_str(&format!("\nStopped: {}", describe_stop(stop)));
     }
@@ -87,13 +85,10 @@ pub fn run_until(session: &mut Session, args: &Json) -> Result<String, String> {
         return Err("run_until needs an address, or addresses".into());
     }
     let limit = count(args, "max_frames", RUN_LIMIT_FRAMES)?;
+    let note = session.let_go_of_recording();
     let before = session.spec.bus.frame;
     let stop = run_to(session, &wanted, limit)?;
-    Ok(after_running(
-        session,
-        session.spec.bus.frame - before,
-        Some(stop),
-    ))
+    Ok(note.to_string() + &after_running(session, session.spec.bus.frame - before, Some(stop)))
 }
 
 /// Run with temporary breakpoints on `wanted`, putting back whatever

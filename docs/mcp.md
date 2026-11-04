@@ -323,7 +323,13 @@ stop part-way through a frame and look.
 **A recording is played by fetch count.** A frame of an RZX is a number of
 opcode fetches, and the interrupt comes at the recording's own frame boundary
 rather than on the T-state clock. `play_recording` does that; see
-[`timing.md`](timing.md).
+[`timing.md`](timing.md). Anything else that runs the machine — `run_frames`,
+`run_tstates`, `run_until`, `press_keys`, `type_text` — lets go of the recording
+first and says so, because the machine can only follow one clock: with the
+recording in place, a frame ended nowhere but at a recorded boundary, so
+`run_frames` used to run for ever inside one frame with no interrupt and report
+none run. `force_branch` runs its fork on the machine's own clock and leaves
+the recording where it was.
 
 **There is no JSON crate in the lock file**, and none can be added, so
 `src/mcp/json.rs` is a small implementation of exactly what JSON-RPC uses —

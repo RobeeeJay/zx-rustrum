@@ -62,6 +62,12 @@ saving a state every few thousand frames to force branches from later. There is 
 tape to compare with, so say the export is the machine at the recording's first
 frame, and what had already happened by then.
 
+Poking the game afterwards is done on the machine's own clock: `run_frames`,
+`press_keys`, `run_until` and the rest let go of the recording first and say so
+(before they did, they ran for ever inside one recorded frame with no interrupt,
+and every poke looked ignored). So play the recording to the end, or to the state
+you want, before poking.
+
 Watch what `play_recording` says about coming adrift. A replay that has left
 the recorded path still runs the game's own code, so what ran still counts as
 code, but it is being played with input meant for somewhere else: it may never
