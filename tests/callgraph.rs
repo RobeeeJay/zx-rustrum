@@ -67,6 +67,37 @@ fn a_loop_in_the_program_does_not_run_the_layers_away() {
     );
 }
 
+/// The test above cannot fail by running away: with three routines there are
+/// only three layers to run to. Trans Am's graph has two routines that seem to
+/// call each other, the player's car and the scenery drawer, and among sixty
+/// routines that drew every one of them in a layer of its own.
+#[test]
+fn a_loop_among_many_routines_does_not_run_the_layers_away() {
+    // main calls a, a and b call each other, and main calls twenty others.
+    let mut edges = vec![
+        ((0x8000, 0x8100), 4),
+        ((0x8100, 0x8200), 4),
+        ((0x8200, 0x8100), 4),
+    ];
+    let mut work = vec![(0x8000, 300), (0x8100, 200), (0x8200, 100)];
+    for i in 0..20u16 {
+        edges.push(((0x8000, 0x9000 + i * 4), 1));
+        work.push((0x9000 + i * 4, 10));
+    }
+    let g = graph(&edges, &work);
+    let layer = |at: u16| g.node(at).expect("in the drawing").layer;
+    assert_eq!(
+        (layer(0x8000), layer(0x8100), layer(0x8200)),
+        (0, 1, 2),
+        "main, then a, then b"
+    );
+    assert_eq!(
+        g.layers, 3,
+        "three layers for 23 routines, not {}",
+        g.layers
+    );
+}
+
 /// Ordering the routines within a layer is what keeps the lines followable.
 /// The barycentre sweep does not promise the fewest crossings, but it has to
 /// beat the order the addresses happen to be in.

@@ -140,13 +140,18 @@ pub fn layout_keeping(
 /// the drawing shows them as lines going back the way they came, which is what
 /// a recursive call is.
 fn layers(kept: &[u16], links: &[(u16, u16, u32)]) -> BTreeMap<u16, usize> {
+    let back = back_edges(kept, links);
     let mut layer: BTreeMap<u16, usize> = kept.iter().map(|at| (*at, 0)).collect();
-    // Longest path, relaxed until nothing moves. A pass can only push a
-    // routine further right, and nothing goes past the number of routines
-    // there are, so this ends.
+    // Longest path, relaxed until nothing moves. With the back edges out
+    // what is left has no cycle, so a routine's layer settles within as many
+    // passes as there are routines. Relaxing the cycles as well pushed every
+    // routine on one to the last layer there was.
     for _ in 0..kept.len() {
         let mut moved = false;
         for (from, to, _) in links {
+            if back.contains(&(*from, *to)) {
+                continue;
+            }
             let want = layer[from] + 1;
             if want > layer[to] && want < kept.len() {
                 layer.insert(*to, want);
@@ -158,6 +163,55 @@ fn layers(kept: &[u16], links: &[(u16, u16, u32)]) -> BTreeMap<u16, usize> {
         }
     }
     layer
+}
+
+/// The calls that close a cycle: following calls from the routines nothing
+/// calls, in address order, an edge to a routine still being followed is one
+/// that goes back. Starting from those routines is what makes the main loop's
+/// call the forward one and the call back the one left out.
+fn back_edges(kept: &[u16], links: &[(u16, u16, u32)]) -> BTreeSet<(u16, u16)> {
+    let mut callees: BTreeMap<u16, Vec<u16>> = BTreeMap::new();
+    for (from, to, _) in links {
+        callees.entry(*from).or_default().push(*to);
+    }
+    let called: BTreeSet<u16> = links.iter().map(|(_, to, _)| *to).collect();
+    let starts = kept
+        .iter()
+        .filter(|at| !called.contains(at))
+        .chain(kept.iter().filter(|at| called.contains(at)));
+
+    let mut back = BTreeSet::new();
+    let mut done: BTreeSet<u16> = BTreeSet::new();
+    let mut on_path: BTreeSet<u16> = BTreeSet::new();
+    for start in starts {
+        if done.contains(start) {
+            continue;
+        }
+        // Depth first without recursion: each entry is a routine and how many
+        // of its callees have been looked at.
+        let mut stack: Vec<(u16, usize)> = vec![(*start, 0)];
+        on_path.insert(*start);
+        while let Some(&mut (at, ref mut next)) = stack.last_mut() {
+            let to = callees.get(&at).and_then(|c| c.get(*next)).copied();
+            *next += 1;
+            match to {
+                Some(to) if on_path.contains(&to) => {
+                    back.insert((at, to));
+                }
+                Some(to) if !done.contains(&to) => {
+                    on_path.insert(to);
+                    stack.push((to, 0));
+                }
+                Some(_) => {}
+                None => {
+                    on_path.remove(&at);
+                    done.insert(at);
+                    stack.pop();
+                }
+            }
+        }
+    }
+    back
 }
 
 /// Where each routine sits within its layer.
