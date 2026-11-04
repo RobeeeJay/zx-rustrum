@@ -91,6 +91,10 @@ pub struct Session {
     /// What was in memory when each of those was taken, as the CPU saw it, so
     /// "what changed since" can be answered without unpacking a snapshot.
     pub memories: BTreeMap<String, Vec<u8>>,
+    /// The CPU as it was when each was taken. A .sna sets IFF1 from IFF2, has
+    /// no HALT, and pushes PC into the two bytes below SP, so a program that
+    /// runs with IFF1 clear and draws with SP in its own data came back broken.
+    pub cpus: BTreeMap<String, crate::z80::Z80>,
     /// The recording being played, if there is one.
     pub rzx: Option<Playing>,
     /// A ZX81, when that is the machine in use. A different machine rather
@@ -144,6 +148,7 @@ impl Session {
             notes: Notes::unattached(),
             states: BTreeMap::new(),
             memories: BTreeMap::new(),
+            cpus: BTreeMap::new(),
             rzx: None,
             zx81: None,
             history: Vec::new(),
@@ -879,6 +884,7 @@ impl Session {
         }
         self.states.insert(name.clone(), data);
         self.state_of.insert(name.clone(), self.loaded.clone());
+        self.cpus.insert(name.clone(), self.spec.cpu.clone());
         // And the memory as the CPU sees it, for changed_since. 48K of it,
         // which is nothing beside what a snapshot costs.
         self.memories.insert(
@@ -926,6 +932,18 @@ impl Session {
             self.ran_before.clear();
         }
         snapshot::load_sna(&mut self.spec, &data)?;
+        if let Some(cpu) = self.cpus.get(name) {
+            self.spec.cpu = cpu.clone();
+            // The .sna's PC went into the two bytes below SP; put back what
+            // the program had there.
+            if let Some(memory) = self.memories.get(name) {
+                for at in [cpu.sp.wrapping_sub(2), cpu.sp.wrapping_sub(1)] {
+                    if at >= 0x4000 {
+                        self.spec.bus.poke(at, memory[usize::from(at - 0x4000)]);
+                    }
+                }
+            }
+        }
         Ok(format!(
             "Restored {name:?}. PC ${:04X}, SP ${:04X}",
             self.spec.cpu.pc, self.spec.cpu.sp

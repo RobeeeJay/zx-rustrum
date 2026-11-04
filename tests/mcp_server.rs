@@ -434,6 +434,66 @@ fn a_saved_machine_can_be_put_back_exactly() {
     assert!(missing.contains("before"), "{missing}");
 }
 
+/// A .sna keeps only IFF2, sets IFF1 from it, has no HALT, and pushes PC
+/// into the two bytes below SP. Nightshade runs with IFF1 clear and IFF2 set
+/// and draws with SP pointing into its pictures, so a state put back through
+/// a .sna alone switched interrupts on in the middle of a drawing loop, and
+/// the game wrote over its own code within a hundred frames. A halted machine
+/// before the restore also left the restored one halted at an instruction
+/// that is not a HALT.
+#[test]
+fn a_saved_state_comes_back_with_the_cpu_and_the_stack_as_they_were() {
+    let mut server = Server::new();
+    let cpu = &mut server.session.spec.cpu;
+    cpu.pc = 0x8000;
+    cpu.sp = 0x9002;
+    cpu.iff1 = false;
+    cpu.iff2 = true;
+    cpu.halted = false;
+    server.session.spec.bus.poke(0x9000, 0x12);
+    server.session.spec.bus.poke(0x9001, 0x34);
+
+    call(
+        &mut server,
+        "save_state",
+        Json::obj([("name", Json::str("drawing"))]),
+    )
+    .unwrap();
+
+    let cpu = &mut server.session.spec.cpu;
+    cpu.iff1 = true;
+    cpu.halted = true;
+    cpu.pc = 0x1234;
+
+    call(
+        &mut server,
+        "restore_state",
+        Json::obj([("name", Json::str("drawing"))]),
+    )
+    .unwrap();
+    let cpu = &server.session.spec.cpu;
+    assert!(
+        !cpu.iff1 && cpu.iff2,
+        "interrupts should be as saved: IFF1 {} IFF2 {}",
+        cpu.iff1,
+        cpu.iff2
+    );
+    assert!(
+        !cpu.halted,
+        "the restored machine was not halted when saved"
+    );
+    assert_eq!((cpu.pc, cpu.sp), (0x8000, 0x9002), "PC and SP");
+    let below_sp = (
+        server.session.spec.bus.peek_raw(0x9000),
+        server.session.spec.bus.peek_raw(0x9001),
+    );
+    assert_eq!(
+        below_sp,
+        (0x12, 0x34),
+        "the bytes below SP should be the program's, not the PC a .sna pushed there"
+    );
+}
+
 /// A snapshot can go to a file and come back from one, which is how a session
 /// is picked up again tomorrow.
 #[test]
