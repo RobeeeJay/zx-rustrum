@@ -34,6 +34,18 @@ pub fn probe_model_bytes(kind: &str, data: &[u8]) -> Result<Model, String> {
             let hw = data.get(34).copied().unwrap_or(0);
             Ok(model_from_hw(ext_len, hw))
         }
+        "szx" => crate::szx::probe_model(data),
+        other => Err(format!("unsupported snapshot type: .{other}")),
+    }
+}
+
+/// Load a snapshot that is not a file of its own, by the extension it would
+/// have had. What comes back is what a .szx could not put back, if anything.
+pub fn load_bytes(spec: &mut Spectrum, kind: &str, data: &[u8]) -> Result<String, String> {
+    match kind {
+        "sna" => load_sna(spec, data).map(|_| String::new()),
+        "z80" => load_z80(spec, data).map(|_| String::new()),
+        "szx" => crate::szx::load(spec, data),
         other => Err(format!("unsupported snapshot type: .{other}")),
     }
 }

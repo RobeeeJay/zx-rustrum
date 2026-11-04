@@ -261,9 +261,22 @@ begun, and its input not put in front of the machine, until there is budget to
 run some of it. `run_fetches` reports what it ran rather than what was asked
 for: instructions run whole, so a prefixed one overshoots, and clamping the
 count to the budget loses the overshoot on every piece. A recording that
-asks for more input than it holds has come adrift, and the toolbar says so
-rather than letting the picture look authentic. `recordings/` is gitignored for
-the same reason as `tapes/`.
+asks for more input than it holds, or leaves some of a frame's unread, has
+come adrift, and the toolbar says so rather than letting the picture look
+authentic. `recordings/` is gitignored for the same reason as `tapes/`.
+
+**A recorded interrupt is taken at the frame boundary or not at all**, except
+after an `EI`, which holds it off one instruction. The boundary is where the
+instruction count ran out, and the line went down on the recording machine
+before it; giving it the ULA's thirty-two T-states from there let Jetpac take
+an interrupt the recording says it never took, at frame 1,444, and six of
+eighteen recordings came adrift that way. A recording can also carry a
+snapshot every few thousand frames — SPIN writes one after loading a tape
+faster than the machine could — and each replaces the machine before the frame
+it comes before, keeping what is known about which code has run. Lunar
+Jetman, Underwurlde and Alien 8 still part from their recordings part way, all
+three made by SPIN, for a reason not yet found; `docs/timing.md` has what is
+known.
 
 **Fastload answers the ROM instead of playing to it.** A tape loads at
 1,500 baud however fast the machine is run — the pulses take as long as they
@@ -689,8 +702,8 @@ because a routine taken into another game moves with its tables and keeps none
 of its numbers; blanking only the addresses held Saboteur's sequel at 8%
 instead of 15%. It first fingerprinted what a run of the machine fetched, and
 that was given up: on the same games a disassembly held as much or more —
-Jetpac's 2,620 instructions against 2,062 from its whole recording and 1,824
-from a scripted run — and a recording stopped part way dropped Knight Lore's
+Jetpac's 2,620 instructions against 1,824 from a scripted run — and a
+recording stopped part way dropped Knight Lore's
 share of Alien 8 from 66% to 61%. An `.asm` has no addresses on its lines, so
 they are counted up from the ORG with lengths read off the emulator's own
 decoder, and all 1,908 labels in the three disassemblies land where the notes

@@ -62,6 +62,12 @@ saving a state every few thousand frames to force branches from later. There is 
 tape to compare with, so say the export is the machine at the recording's first
 frame, and what had already happened by then.
 
+Watch what `play_recording` says about coming adrift. A replay that has left
+the recorded path still runs the game's own code, so what ran still counts as
+code, but it is being played with input meant for somewhere else: it may never
+reach what the player reached, and nothing after that frame is "what the
+player did". Note the frame it parted at in the report.
+
 ## 2. Find the shape before reading any code
 
 - `tape_blocks` and `scripts/tape_blocks.py TAPE` show what loads where. Small

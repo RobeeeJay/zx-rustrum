@@ -1073,6 +1073,7 @@ impl App {
                 data,
             }),
             frames: capture.frames,
+            later: Vec::new(),
             start_t: capture.start_t,
         };
         Some(crate::rzx::write(&recording))
@@ -1800,14 +1801,7 @@ impl App {
             Ok(model) => self.switch_model(model),
             Err(e) => return self.set_status(format!("{}: {e}", path.display()), true),
         }
-        let loaded = match snapshot.extension.as_str() {
-            "sna" => snapshot::load_sna(&mut self.spec, &snapshot.data),
-            "z80" => snapshot::load_z80(&mut self.spec, &snapshot.data),
-            other => Err(format!(
-                "unsupported snapshot type in the recording: .{other}"
-            )),
-        };
-        if let Err(e) = loaded {
+        if let Err(e) = snapshot::load_bytes(&mut self.spec, &snapshot.extension, &snapshot.data) {
             return self.set_status(format!("{}: {e}", path.display()), true);
         }
 
@@ -1926,6 +1920,14 @@ impl App {
             // is not begun — and its input not put in front of the machine —
             // until there is budget to run some of it.
             if !started {
+                if let Some(snapshot) = rzx.recording.snapshot_before(rzx.frame) {
+                    if let Err(e) = crate::rzx::carry_on_from(&mut self.spec, snapshot) {
+                        self.set_status(format!("The recording's snapshot: {e}"), true);
+                        self.stop_playback();
+                        return;
+                    }
+                }
+                let rzx = self.rzx.as_ref().expect("still playing");
                 let frame = &rzx.recording.frames[rzx.frame];
                 let fetches = frame.fetches as u32;
                 let inputs = frame.inputs.clone();
@@ -1933,8 +1935,7 @@ impl App {
                     rzx.remaining = fetches;
                 }
                 if let Some(playback) = &mut self.spec.bus.playback {
-                    playback.inputs = inputs;
-                    playback.cursor = 0;
+                    playback.start_frame(inputs);
                 }
             }
             let (stop, ran) = self.spec.run_fetches(ask);
@@ -4344,7 +4345,13 @@ impl App {
             if let Some(rzx) = &self.rzx {
                 let (frame, total) = (rzx.frame, rzx.recording.len());
                 let mut max_speed = rzx.max_speed;
-                let short = self.spec.bus.playback.as_ref().map_or(0, |p| p.short);
+                let drift = self
+                    .spec
+                    .bus
+                    .playback
+                    .as_ref()
+                    .filter(|p| p.adrift())
+                    .map(|p| (p.short, p.unread));
                 let percent = if total == 0 {
                     0.0
                 } else {
@@ -4384,13 +4391,17 @@ impl App {
                 // come adrift from the machine: what is on screen after that
                 // is the emulator's guess, not what was played, and saying so
                 // is better than letting it look authentic.
-                if short > 0 {
-                    ui.label(egui::RichText::new(format!("out of step ({short})")).color(theme::RED))
-                        .on_hover_text(
-                            "The program has read more from the ports than the \
-                             recording holds, so it is no longer following the \
-                             path it was recorded taking.",
-                        );
+                if let Some((short, unread)) = drift {
+                    ui.label(
+                        egui::RichText::new(format!("out of step ({})", short + unread))
+                            .color(theme::RED),
+                    )
+                    .on_hover_text(format!(
+                        "The program has read from the ports {short} times more than \
+                         the recording holds, and left what was recorded unread in \
+                         {unread} frames, so it is no longer following the path it was \
+                         recorded taking."
+                    ));
                 }
                 if ui.button("Stop").clicked() {
                     self.stop_playback();

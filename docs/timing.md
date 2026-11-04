@@ -32,13 +32,37 @@ number.
 The ULA's own eight-T-state fetch cycle starts one T-state *after* the
 contention anchor — see the snow section, which is what settled it.
 
-**The interrupt line is held for 32 T-states** (`IRQ_LEN`). While a recording
-is playing, that window is counted from when the interrupt was raised rather
-than from the start of the frame, because a recording's frame boundary is not
-the T-state frame's. Getting this wrong once made every interrupt acceptable
-anywhere in the frame — the stored raise time went stale after a reset and
+**The interrupt line is held for 32 T-states** (`IRQ_LEN`), counted from the
+start of the frame. Getting this wrong once made every interrupt acceptable
+anywhere in the frame — a stored raise time went stale after a reset and
 `saturating_sub` turned it into zero — and the Space Harrier flicker got
 worse, not better.
+
+While a recording is playing there is no window at all: the interrupt is
+taken at the recording's frame boundary or not taken, except after an `EI`,
+which holds it off one instruction on any Z80. The boundary is where the
+instruction count ran out, and on the machine that made the recording the line
+went down somewhere before it, during or before the last instruction. This
+used to give the interrupt thirty-two T-states from the boundary, which was
+wrong, and measurably: Jetpac's recording reaches `XOR A`, `LD ($5DD5),A`,
+`EI` at $69A2 just after frame 1,444 begins, took the interrupt about thirty
+T-states in, and read the keyboard seventeen times in a frame the recording
+says read nothing. From there every frame was out of step. With the interrupt
+taken at the boundary or not at all, Jetpac, Pssst, Atic Atac, Sabre Wulf,
+Space Harrier and Out Run play their whole recordings in step, where before
+they parted company between frame 1,000 and frame 45,500, and the nine that
+were in step stay so (Vindicator, a zip, was checked only for the 2,000 frames the test plays).
+
+**Still open:** Lunar Jetman parts from its recording at frame 11,315 of
+132,933, Underwurlde at about 26,000 of 149,286 and Alien 8 at 132,195 of
+342,604 — all three made by SPIN, and the last of them the same under the old
+rule. Each first shows as a frame that reads one or two bytes more or less
+than was recorded, from a machine that looks ordinary, so the parting happened
+earlier and quietly. Alien 8's recording has a frame of four or five fetches
+after every long one, 171,304 of them, while the game keeps interrupts off
+throughout; SPIN appears to mark a boundary where the line goes down and
+another where it would have been let go, which costs nothing while interrupts
+are off and may be what goes wrong when they are not. Not yet found.
 
 **48K late timing.** Later 48K machines run the display one T-state later
 relative to the interrupt. Both variants existed; HALT2INT tells them apart,
@@ -190,7 +214,20 @@ about that are easy to get wrong and both were:
   recorded frame whenever the machine takes longer over the recorded
   instructions than the machine that recorded them did.
 
-That second one is measurable: Space Harrier's recorded frames hold 9,400 to
+Two more were found by playing all eighteen recordings to the end and
+counting both ways a frame can be out of step — reading more than was
+recorded, and leaving some unread, which the player did not count until
+then. A recording can carry more than one snapshot: SPIN loads a tape faster
+than the machine could, cannot record the instructions it skipped, and so
+writes down the machine as it stands afterwards, every few thousand frames in
+Out Run and Shadow Dancer. Only the last was kept, so both started from where
+the player stopped and were fed the input from the beginning. Each later
+snapshot now replaces the machine before the frame it comes before, keeping
+the record of what code has run, since it is the same run carried on. And a
+recording's snapshot can be a `.szx`, as Tank Command's is, which would not
+load at all.
+
+The second of the first two is measurable: Space Harrier's recorded frames hold 9,400 to
 11,600 fetches from about frame 1,100 on, and at the ~11 T-states a fetch that
 game averages — the same live from tape as under replay — a video frame holds
 about 6,300. So its recorded frames run 97,000 to 147,000 T-states. Manic

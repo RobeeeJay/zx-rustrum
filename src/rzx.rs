@@ -36,12 +36,26 @@ pub struct Snapshot {
 pub struct Recording {
     pub creator: String,
     pub snapshot: Option<Snapshot>,
+    /// Snapshots further in, each with the frame it comes before. A recorder
+    /// that loads a tape faster than the machine could — SPIN's flash
+    /// loading — cannot record the instructions it skipped, so it writes the
+    /// machine as it stands afterwards and the frames go on from there.
+    pub later: Vec<(usize, Snapshot)>,
     pub frames: Vec<Frame>,
     /// The T-state the first frame starts at.
     pub start_t: u32,
 }
 
 impl Recording {
+    /// The snapshot the machine is replaced by before `frame` is played, if
+    /// the recording carries one there.
+    pub fn snapshot_before(&self, frame: usize) -> Option<&Snapshot> {
+        self.later
+            .iter()
+            .find(|(at, _)| *at == frame)
+            .map(|(_, snapshot)| snapshot)
+    }
+
     /// How long the recording runs, in frames.
     pub fn len(&self) -> usize {
         self.frames.len()
@@ -151,6 +165,7 @@ pub fn parse(data: &[u8]) -> Result<Recording, String> {
     let mut recording = Recording {
         creator: String::new(),
         snapshot: None,
+        later: Vec::new(),
         frames: Vec::new(),
         start_t: 0,
     };
@@ -167,7 +182,13 @@ pub fn parse(data: &[u8]) -> Result<Recording, String> {
         let body = &data[off + 5..off + len];
         match id {
             0x10 => recording.creator = creator_name(body),
-            0x30 => recording.snapshot = Some(snapshot(body)?),
+            // Only the first is where the recording starts. Keeping the last
+            // instead, as this once did, started Out Run from the machine as
+            // it stood at the end and fed it the input recorded at the start.
+            0x30 if recording.snapshot.is_none() => recording.snapshot = Some(snapshot(body)?),
+            0x30 => recording
+                .later
+                .push((recording.frames.len(), snapshot(body)?)),
             0x80 => {
                 let (frames, start_t) = frames(body)?;
                 recording.start_t = start_t;
@@ -281,4 +302,22 @@ fn u32(data: &[u8], at: usize) -> u32 {
 
 fn u16v(data: &[u8], at: usize) -> u16 {
     u16::from_le_bytes([data[at], data[at + 1]])
+}
+
+/// Put the machine where a snapshot part way through the recording says it
+/// was. It is the same run carried on, not a new one, so what is known about
+/// which bytes have run is kept: loading a snapshot otherwise forgets it, and
+/// a game whose loader the recorder skipped would come out as never having
+/// run its loader's half of the program.
+pub fn carry_on_from(
+    spec: &mut crate::machine::Spectrum,
+    snapshot: &Snapshot,
+) -> Result<(), String> {
+    let tracker = std::mem::take(&mut spec.bus.tracker);
+    let loaded = crate::snapshot::load_bytes(spec, &snapshot.extension, &snapshot.data);
+    spec.bus.tracker = tracker;
+    // The snapshot is the machine between two frames, with the interrupt
+    // already dealt with: the next frame counts from here.
+    spec.bus.irq_pending = false;
+    loaded.map(|_| ())
 }

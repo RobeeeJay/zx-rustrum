@@ -214,12 +214,6 @@ pub struct SpectrumBus {
     /// of bytes a second and none of them is going to be stepped back over.
     pub undo: Option<Vec<(u16, u8)>>,
 
-    /// When the interrupt line went down, in T-states since the machine
-    /// started, while a recording is playing. The ULA lets it go again after a
-    /// few dozen, and a recording's frame boundary is not the T-state frame's,
-    /// so there it has to be counted from the moment it was asked for.
-    pub irq_raised: u64,
-
     /// The recording being made, if one is. A frame of an RZX is a number of
     /// opcode fetches and the bytes every IN in that stretch gave back, and
     /// neither can be worked out after the fact.
@@ -383,7 +377,6 @@ impl SpectrumBus {
             tints: None,
             undo: None,
             capture: None,
-            irq_raised: 0,
             tstates: 0,
             frame: 0,
             irq_pending: false,
@@ -1259,12 +1252,10 @@ impl SpectrumBus {
         self.video(offset)
     }
 
-    /// End-of-frame bookkeeping: flush sound, re-arm the interrupt.
-    /// Put the interrupt line down, and note when: the ULA lets it go again
-    /// after a few dozen T-states whether anything took it or not.
+    /// Put the interrupt line down at a recording's frame boundary. It is
+    /// taken there or not at all — see `check_interrupt`.
     pub fn raise_interrupt(&mut self) {
         self.irq_pending = true;
-        self.irq_raised = self.total_t();
     }
 
     /// Every access to $0038 turns the µSpeech over, whichever kind of cycle
@@ -1759,9 +1750,28 @@ pub struct Playback {
     /// Never zero on a recording that has come adrift from the machine, so it
     /// is worth telling the user about rather than playing on regardless.
     pub short: u32,
+    /// How many frames ended with recorded input still unread. Just as far
+    /// out of step as reading too much, and usually the first sign of it: a
+    /// machine that missed an interrupt reads nothing for a frame, and
+    /// nothing is not more than was recorded.
+    pub unread: u32,
 }
 
 impl Playback {
+    /// Hand over the next frame's input, counting what the last one left.
+    pub fn start_frame(&mut self, inputs: Vec<u8>) {
+        if self.cursor < self.inputs.len() {
+            self.unread += 1;
+        }
+        self.inputs = inputs;
+        self.cursor = 0;
+    }
+
+    /// Whether anything has shown the recording and the machine parting.
+    pub fn adrift(&self) -> bool {
+        self.short > 0 || self.unread > 0
+    }
+
     /// The next recorded byte. A frame that reads more than was recorded is
     /// out of step; the last byte is repeated rather than inventing one, and
     /// the shortfall is counted.
@@ -2060,22 +2070,25 @@ impl Spectrum {
             // across the top of the frame misses that one entirely.
             //
             // Measured against the frame while the machine runs on its own,
-            // which is where the ULA measures it from. A recording's frames
-            // are counted in opcode fetches and wander away from the T-state
-            // frame, so there the window runs from the moment the recording
-            // asked for the interrupt.
+            // which is where the ULA measures it from.
             //
-            // Two rules rather than one clock for both. Timing the ordinary
-            // case from a stored T-state as well left that number behind after
-            // a reset — which is what loading a tape does — with the counter
-            // back at zero and the stored moment in the future, so the
-            // subtraction saturated, nothing was ever missed, and every
-            // interrupt was taken wherever in the frame the program happened
-            // to enable them.
-            let missed = match self.bus.playback {
-                None => self.bus.tstates >= IRQ_LEN,
-                Some(_) => self.bus.total_t().saturating_sub(self.bus.irq_raised) >= IRQ_LEN as u64,
-            };
+            // A recording's frame boundary is not a T-state: it is wherever
+            // the instruction count ran out, and the line went down on the
+            // machine that made it somewhere before that, during or before the
+            // last instruction. So the interrupt is taken at the boundary or
+            // not at all — except after an EI, which holds it off for one more
+            // instruction on any Z80. Giving it the ULA's thirty-two T-states
+            // from the boundary instead let Jetpac take an interrupt with an EI
+            // twenty T-states into a frame that the recording says read
+            // nothing, and every recording that did this came adrift there.
+            //
+            // Timing the ordinary case from a stored T-state as well left that
+            // number behind after a reset — which is what loading a tape does —
+            // with the counter back at zero and the stored moment in the
+            // future, so the subtraction saturated, nothing was ever missed,
+            // and every interrupt was taken wherever in the frame the program
+            // happened to enable them.
+            let missed = self.bus.playback.is_none() && self.bus.tstates >= IRQ_LEN;
             if missed {
                 self.bus.irq_pending = false;
             } else if self.cpu.interrupt(&mut self.bus) {
@@ -2098,6 +2111,8 @@ impl Spectrum {
                     let now = self.bus.total_t();
                     self.profiler.on_call(self.cpu.pc, self.cpu.sp, now);
                 }
+            } else if self.bus.playback.is_some() && !self.cpu.defer_int {
+                self.bus.irq_pending = false;
             }
         }
         // The AMX mouse's PIO holds /INT down until the CPU takes it, rather

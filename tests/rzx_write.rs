@@ -50,6 +50,7 @@ fn a_recording_round_trips_through_rzx() {
             extension: "sna".to_string(),
             data: vec![0x42; 49179],
         }),
+        later: Vec::new(),
         frames: vec![
             rzx::Frame {
                 fetches: 1234,

@@ -219,6 +219,20 @@ these very recordings, so the two sources hold the same code. Jetpac's
 disassembly holds more than its recording, because it was built up from more
 than one session.
 
+**The Jetpac row is wrong, and I've left it there so it can be seen to be.**
+When it was measured the player gave a recorded interrupt thirty-two
+T-states from the frame boundary, and Jetpac enables interrupts just after one
+at frame 1,444. From there the machine was not following the recording: it
+read seventeen bytes in a frame recorded as reading none, and played the
+other 52,000 frames to input meant for somewhere else. So 2,062 is what a
+broken replay of Jetpac reached, not what the recording reaches. Alien 8's
+replay parts company too, at frame 132,195 of 342,604, for a reason not yet
+found, so its disassembly is of what ran on a replay that was right for the
+first 132,195 frames. (Knight Lore's is in step the whole way.)
+[`timing.md`](timing.md) has the fault and the fix. None of this touches the
+conclusion: the disassembly still holds at least as much as any replay, and
+gives the same answer every time.
+
 The run-time side only got this close because the recordings were played all
 the way through. Stopped at 200,000 frames, Knight Lore's share of Alien 8 came
 out at 61.4% instead of 65.7%. My earlier scripted runs from the tapes, a

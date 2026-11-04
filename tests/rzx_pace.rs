@@ -27,6 +27,7 @@ fn playing_frames_of(speed: f32, fetches: u16) -> App {
         recording: Recording {
             creator: "test".into(),
             snapshot: None,
+            later: Vec::new(),
             // Sixty frames of ten thousand fetches each: a NOP is four
             // T-states, so ten thousand of them is about half a frame's worth
             // of work, and the length hardly matters — what is being measured

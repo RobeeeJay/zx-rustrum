@@ -1,7 +1,9 @@
 # Worked example: Alien 8 (Ultimate, 1985), from a recording and Knight Lore
 
 `recordings/Alien8.rzx`, 342,604 frames, played through in about a minute with the
-observer on: 8,834 bytes of code ran. The disassembly is
+observer on: 8,834 bytes of code ran. The replay leaves the recorded path at frame
+132,195, which was not noted at the time; what ran after it is the game's code played to the
+wrong input. The disassembly is
 `disassembly/Alien 8 (1985)(Ultimate Play The Game).asm`, $5B00-$FFFF, as the machine
 stood at the recording's first frame.
 

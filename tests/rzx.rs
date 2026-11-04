@@ -382,8 +382,8 @@ fn loading_a_recording_remembers_its_directory() {
 /// lets it go, so a program with interrupts disabled across the top of a frame
 /// misses that one. That window is measured against the frame while the
 /// machine runs on its own — but a recording's frames are counted in opcode
-/// fetches and wander away from the T-state frame, so there it runs from the
-/// moment the recording asked. Measured against the frame in both worlds, the
+/// fetches and wander away from the T-state frame, so there it is the moment
+/// the recording asked and no later. Measured against the frame in both worlds, the
 /// interrupt a recording asked for was thrown away as missed and the machine
 /// ran on without ever taking one.
 #[test]
@@ -441,15 +441,27 @@ fn the_interrupt_window_is_timed_from_when_the_line_goes_down() {
 /// recording holds for it, and no more. Reading more than was recorded means
 /// the machine has taken a path the recording never took.
 ///
-/// Two thousand frames, which is forty seconds of play. They stay in step for
-/// a good deal longer than that — Manic Miner for the whole recording, Space
-/// Harrier for 7,891 frames and Vindicator for 13,328 — and then drift, for
-/// something this does not yet explain. Asserting where they part company
-/// would be writing today's accuracy into a test; asserting a stretch they are
-/// exact over catches the thing that had them adrift by the second frame.
+/// Two thousand frames, which is forty seconds of play. This comment used to
+/// say that Space Harrier stayed in step for 7,891 frames and Vindicator for
+/// 13,328 and then drifted "for something this does not yet explain". The
+/// something was the interrupt window: a recording's boundary is where the
+/// instruction count ran out, not where the line went down, and giving the
+/// interrupt thirty-two T-states from there let a program that enabled
+/// interrupts just after it take one the recording says was never taken.
+/// Jetpac parted company that way at frame 1,444. Out Run went wrong by the
+/// second frame for another reason — it carries a snapshot every few
+/// thousand frames, and the last was being played from the start — and Tank
+/// Command's snapshot is a .szx, which did not load at all.
 #[test]
 fn the_recordings_play_back_without_coming_adrift() {
-    for name in ["manic.rzx", "spaceharrier.rzx", "vindicator.zip"] {
+    for name in [
+        "manic.rzx",
+        "spaceharrier.rzx",
+        "vindicator.zip",
+        "Jetpac.rzx",
+        "outrun.rzx",
+        "tankcommand.rzx",
+    ] {
         let path = std::path::PathBuf::from("recordings").join(name);
         if !path.exists() {
             continue;
@@ -461,42 +473,186 @@ fn the_recordings_play_back_without_coming_adrift() {
             app.spec.load_rom(&rom);
         }
         app.load_path(&path);
-        if app.rzx.is_none() {
-            continue;
-        }
-        // One recording frame per call, so what is left of each frame's input
-        // can be read before the next frame replaces it. Both halves matter:
-        // reading more than was recorded means the machine went somewhere the
-        // recording never went, and reading less means it never got to the
-        // code that reads at all — which is what a missed interrupt looks
-        // like, and which a count of overruns alone would call perfect.
-        let mut unused = 0;
+        assert!(app.rzx.is_some(), "{name} did not load: {}", app.status);
         for _ in 0..2000 {
             app.advance(1.0 / 50.0);
-            if let Some(playback) = app.spec.bus.playback.as_ref() {
-                if playback.cursor != playback.inputs.len() {
-                    unused += 1;
-                }
-            }
         }
         let played = app.rzx.as_ref().map(|rzx| rzx.frame).unwrap_or(0);
         assert!(played > 1500, "{name} only played {played} frames");
-        let short = app
-            .spec
-            .bus
-            .playback
-            .as_ref()
-            .map(|playback| playback.short)
-            .unwrap_or(0);
+        let playback = app.spec.bus.playback.as_ref().expect("still playing");
+        // Both halves matter: reading more than was recorded means the
+        // machine went somewhere the recording never went, and reading less
+        // means it never got to the code that reads at all — which is what a
+        // missed interrupt looks like, and which a count of overruns alone
+        // would call perfect.
         assert_eq!(
-            short, 0,
-            "{name} asked for {short} bytes of input the recording did not hold"
-        );
-        assert_eq!(
-            unused, 0,
-            "{name} left the recorded input unread in {unused} of {played} frames"
+            (playback.short, playback.unread),
+            (0, 0),
+            "{name} read {} bytes the recording did not hold and left input \
+             unread in {} of {played} frames",
+            playback.short,
+            playback.unread
         );
     }
+}
+
+/// The interrupt a recording asks for is taken at its boundary or not at all.
+///
+/// The boundary is where the instruction count ran out; the line went down on
+/// the recording machine before that, during or before the last instruction,
+/// so by the time a program three instructions on enables interrupts the line
+/// has gone. Jetpac does exactly this at $69A2 — XOR A, LD ($5DD5),A, EI —
+/// and the recording says the frame after it read nothing at all.
+#[test]
+fn a_recorded_interrupt_is_not_taken_by_an_ei_a_few_instructions_later() {
+    let mut spec = Spectrum::new();
+    for at in 0x8000..0x8100u16 {
+        spec.bus.poke(at, 0x00);
+    }
+    spec.bus.poke(0x8002, 0xFB); // EI after two NOPs
+    spec.cpu.pc = 0x8000;
+    spec.cpu.sp = 0xFF00;
+    spec.cpu.im = 1;
+    spec.cpu.iff1 = false;
+    spec.bus.playback = Some(zx_rustrum::machine::Playback::default());
+    spec.bus.raise_interrupt();
+    spec.run_fetches(10);
+    assert!(
+        spec.cpu.iff1 && spec.cpu.sp == 0xFF00,
+        "the interrupt asked for at the boundary was taken after the EI two \
+         instructions on (PC ${:04X}, SP ${:04X})",
+        spec.cpu.pc,
+        spec.cpu.sp
+    );
+}
+
+/// An EI holds an interrupt off for one instruction on any Z80, so one that
+/// ends a recorded frame does not lose the next frame's interrupt: it is
+/// taken after the instruction that follows.
+#[test]
+fn an_ei_ending_a_recorded_frame_puts_its_interrupt_off_one_instruction() {
+    let mut spec = Spectrum::new();
+    for at in 0x8000..0x8100u16 {
+        spec.bus.poke(at, 0x00);
+    }
+    spec.bus.poke(0x8000, 0xFB);
+    spec.cpu.pc = 0x8000;
+    spec.cpu.sp = 0xFF00;
+    spec.cpu.im = 1;
+    spec.bus.playback = Some(zx_rustrum::machine::Playback::default());
+    spec.run_fetches(1); // the EI, as the last instruction of a frame
+    spec.bus.raise_interrupt();
+    spec.run_fetches(1); // the NOP it defers the interrupt past
+    spec.run_fetches(1);
+    let pushed = spec.bus.peek_raw(0xFEFE) as u16 | (spec.bus.peek_raw(0xFEFF) as u16) << 8;
+    assert_eq!(
+        pushed, 0x8002,
+        "the interrupt should have been taken after the NOP at $8001, \
+         pushing $8002 (SP ${:04X}, PC ${:04X})",
+        spec.cpu.sp, spec.cpu.pc
+    );
+}
+
+/// The snapshots further into a recording replace the machine where they fall.
+///
+/// SPIN loads a tape faster than the machine could and cannot record the
+/// instructions it skipped, so it writes the machine down afterwards and the
+/// frames go on from there: Out Run carries one every few thousand frames.
+/// Keeping only the last of them, as this once did, started the game from
+/// where the player stopped and fed it the input from the beginning. The
+/// first snapshot here is a .szx, as Tank Command's is, which did not load at
+/// all. And what is known about which code has run is kept across the later
+/// one: it is the same run, and a .sna forgets it on loading.
+#[test]
+fn a_snapshot_further_into_a_recording_replaces_the_machine_where_it_falls() {
+    // A machine sitting in a loop of NOPs with interrupts off.
+    let mut first = Spectrum::new();
+    for at in 0x8000..0x8100u16 {
+        first.bus.poke(at, 0x00);
+    }
+    first.bus.poke(0x8100, 0xC3); // JP $8000
+    first.bus.poke(0x8101, 0x00);
+    first.bus.poke(0x8102, 0x80);
+    first.cpu.pc = 0x8000;
+    first.cpu.sp = 0xFF00;
+    first.cpu.iff1 = false;
+    let mut later = first.clone();
+    later.bus.poke(0x9000, 0xAB);
+    later.bus.poke(0x9001, 0x18); // JR -2, somewhere the first never went
+    later.bus.poke(0x9002, 0xFE);
+    later.cpu.pc = 0x9001;
+
+    fn block(out: &mut Vec<u8>, id: u8, body: &[u8]) {
+        out.push(id);
+        out.extend_from_slice(&(body.len() as u32 + 5).to_le_bytes());
+        out.extend_from_slice(body);
+    }
+    fn snapshot(ext: &[u8; 4], data: &[u8]) -> Vec<u8> {
+        let mut body = 0u32.to_le_bytes().to_vec();
+        body.extend_from_slice(ext);
+        body.extend_from_slice(&(data.len() as u32).to_le_bytes());
+        body.extend_from_slice(data);
+        body
+    }
+    fn frames(count: u32) -> Vec<u8> {
+        let mut body = count.to_le_bytes().to_vec();
+        body.push(0);
+        body.extend_from_slice(&0u32.to_le_bytes());
+        body.extend_from_slice(&0u32.to_le_bytes());
+        for _ in 0..count {
+            body.extend_from_slice(&100u16.to_le_bytes());
+            body.extend_from_slice(&0u16.to_le_bytes());
+        }
+        body
+    }
+    let mut rzx = b"RZX!\x00\x0d".to_vec();
+    rzx.extend_from_slice(&0u32.to_le_bytes());
+    block(
+        &mut rzx,
+        0x30,
+        &snapshot(b"szx\0", &zx_rustrum::szx::save(&first)),
+    );
+    block(&mut rzx, 0x80, &frames(2));
+    block(
+        &mut rzx,
+        0x30,
+        &snapshot(b"sna\0", &zx_rustrum::snapshot::save_sna(&later)),
+    );
+    block(&mut rzx, 0x80, &frames(2));
+
+    let recording = zx_rustrum::rzx::parse(&rzx).expect("it should read");
+    assert_eq!(
+        recording
+            .later
+            .iter()
+            .map(|(at, s)| (*at, s.extension.clone()))
+            .collect::<Vec<_>>(),
+        vec![(2, "sna".to_string())],
+        "the second snapshot should come before frame 2"
+    );
+
+    let path = std::env::temp_dir().join("zxrs-two-snapshots.rzx");
+    std::fs::write(&path, &rzx).unwrap();
+    let mut app = app();
+    app.load_path(&path);
+    assert!(app.rzx.is_some(), "it did not load: {}", app.status);
+    app.rzx.as_mut().unwrap().max_speed = true;
+    app.running = true;
+    app.advance(1.0 / 50.0);
+    let rzx = app.rzx.as_ref().unwrap();
+    assert!(rzx.finished(), "only got to frame {}", rzx.frame);
+    assert_eq!(
+        (app.peek(0x9000), app.spec.cpu.pc),
+        (0xAB, 0x9001),
+        "the machine should be the later snapshot's, looping at $9001"
+    );
+    let ran = |addr: u16| app.spec.bus.tracker.executed[app.spec.bus.phys_index(addr)];
+    assert!(
+        ran(0x8000) && ran(0x9001),
+        "both halves of the run should be known to have run: $8000 {}, $9001 {}",
+        ran(0x8000),
+        ran(0x9001)
+    );
 }
 
 /// A reset puts the T-state counter back to nothing, and the interrupt window

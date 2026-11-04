@@ -652,11 +652,7 @@ impl Session {
         let model = snapshot::probe_model_bytes(&snap.extension, &snap.data)?;
         let rom = self.rom_for(model)?;
         self.spec.set_model(model, &rom);
-        match snap.extension.as_str() {
-            "sna" => snapshot::load_sna(&mut self.spec, &snap.data)?,
-            "z80" => snapshot::load_z80(&mut self.spec, &snap.data)?,
-            other => return Err(format!("unsupported snapshot in the recording: .{other}")),
-        }
+        let skipped = snapshot::load_bytes(&mut self.spec, &snap.extension, &snap.data)?;
         self.rom_loaded = true;
         self.spec.bus.playback = Some(crate::machine::Playback::default());
         let frames = recording.len();
@@ -666,11 +662,25 @@ impl Session {
             frame: 0,
         });
         self.loaded = Some(format!("recording {}", path.display()));
-        Ok(format!(
+        let mut out = format!(
             "{} loaded: {frames} frames on a {}. play_recording runs it.",
             path.display(),
             model.name()
-        ))
+        );
+        if let Some(rzx) = &self.rzx {
+            if !rzx.recording.later.is_empty() {
+                out.push_str(&format!(
+                    " It carries {} more snapshots, which replace the machine at the \
+                     frames they come before: the recorder loaded a tape faster than \
+                     the machine could, and wrote down where it had got to.",
+                    rzx.recording.later.len()
+                ));
+            }
+        }
+        if !skipped.is_empty() {
+            out.push_str(&format!("\n{skipped}"));
+        }
+        Ok(out)
     }
 
     /// Play a recording forward. A frame of a recording is a number of opcode
@@ -679,7 +689,6 @@ impl Session {
     fn play_recording(&mut self, args: &Json) -> Result<String, String> {
         let want = count(args, "frames", 1)?;
         let mut ran = 0u32;
-        let mut short = 0u32;
         let mut stopped = None;
         while ran < want {
             let Some(rzx) = &mut self.rzx else {
@@ -688,19 +697,20 @@ impl Session {
             if rzx.frame >= rzx.recording.len() {
                 break;
             }
+            if let Some(snapshot) = rzx.recording.snapshot_before(rzx.frame) {
+                crate::rzx::carry_on_from(&mut self.spec, snapshot)?;
+            }
             let frame = &rzx.recording.frames[rzx.frame];
             let fetches = frame.fetches.max(1) as u32;
             let inputs = frame.inputs.clone();
             rzx.frame += 1;
             if let Some(playback) = &mut self.spec.bus.playback {
-                playback.inputs = inputs;
-                playback.cursor = 0;
+                playback.start_frame(inputs);
             }
             let (stop, _) = self.spec.run_fetches(fetches);
             self.spec.bus.end_frame_here();
             self.spec.bus.raise_interrupt();
             ran += 1;
-            short = self.spec.bus.playback.as_ref().map_or(0, |p| p.short);
             if !matches!(stop, Stop::Budget) {
                 stopped = Some(stop);
                 break;
@@ -716,17 +726,24 @@ impl Session {
         if let Some(stop) = stopped {
             out.push_str(&format!("\nStopped: {}", describe_stop(stop)));
         }
-        if short > 0 {
-            out.push_str(&format!(
-                "\n{short} frames asked for more input than the recording holds: it has come adrift."
-            ));
-        }
+        out.push_str(&self.drift());
         Ok(out)
+    }
+
+    /// What says the machine has left the recorded path, if anything has.
+    fn drift(&self) -> String {
+        match &self.spec.bus.playback {
+            Some(p) if p.adrift() => format!(
+                "\nIt has come adrift: {} reads asked for more input than the recording \
+                 holds, and {} frames left recorded input unread.",
+                p.short, p.unread
+            ),
+            _ => String::new(),
+        }
     }
 
     fn recording_info(&mut self) -> Result<String, String> {
         let rzx = self.rzx.as_ref().ok_or("no recording is loaded")?;
-        let short = self.spec.bus.playback.as_ref().map_or(0, |p| p.short);
         let total: u64 = rzx.recording.frames.iter().map(|f| f.fetches as u64).sum();
         Ok(format!(
             "{}: {} frames, {total} opcode fetches in all. At frame {} ({:.0}%).\n\
@@ -740,14 +757,7 @@ impl Session {
             rzx.recording.len(),
             rzx.frame,
             rzx.frame as f64 / rzx.recording.len().max(1) as f64 * 100.0,
-            if short > 0 {
-                format!(
-                    "\n{short} frames have asked for more input than the recording holds: \
-                     it has come adrift from the machine."
-                )
-            } else {
-                String::new()
-            }
+            self.drift()
         ))
     }
 
@@ -767,11 +777,7 @@ impl Session {
                 .as_ref()
                 .and_then(|r| r.recording.snapshot.clone())
                 .ok_or("the recording carries no snapshot to start from")?;
-            match snap.extension.as_str() {
-                "sna" => snapshot::load_sna(&mut self.spec, &snap.data)?,
-                "z80" => snapshot::load_z80(&mut self.spec, &snap.data)?,
-                other => return Err(format!("unsupported snapshot in the recording: .{other}")),
-            }
+            snapshot::load_bytes(&mut self.spec, &snap.extension, &snap.data)?;
             self.spec.bus.playback = Some(crate::machine::Playback::default());
             if let Some(rzx) = self.rzx.as_mut() {
                 rzx.frame = 0;
