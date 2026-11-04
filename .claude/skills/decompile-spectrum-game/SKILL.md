@@ -119,6 +119,18 @@ Work it down:
 - Name enemies and objects from what is on the `screen`, and say that is how they
   were named.
 
+**A poke that wrecks the machine wrecks the record.** What has run is kept per
+address, and a machine that has been sent into its data executes bytes in the
+middle of instructions; the export then decodes from those and comes out as `DEFB`s
+between instructions, with labels turned into EQUs. Restoring a state does not take
+it back: rebuild from a `reset` and `load_recording`. On Atic Atac a room tour wrote
+through what it took for door records and ran off into the ROM; Trans Am's first
+export had the same marks and its cause was never found. So a script that pokes
+should write only where it has checked it is writing, and compare the game's code
+after every step, leaving out the bytes `self_modifying` lists, stopping the moment
+it changes. Before exporting, look for a one-byte `DEFB` with an instruction either
+side of it: there should be none.
+
 Expect a residue that never runs. Say what it is and why it was not reached.
 
 ## 4. Say what the data is
