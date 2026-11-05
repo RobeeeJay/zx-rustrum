@@ -670,7 +670,7 @@ fn own_tools() -> Vec<Json> {
              is plenty. It costs a branch on every access, so switch it off when finished.",
             [
                 ("enabled", prop("boolean", "on or off (default on)")),
-                ("clear", prop("boolean", "forget what was seen so far")),
+                ("clear", prop("boolean", "forget what was seen so far, and what has run")),
             ],
         ),
         tool(

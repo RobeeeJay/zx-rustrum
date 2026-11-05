@@ -536,3 +536,33 @@ fn the_assembly_export_covers_the_range_asked_for_with_what_was_measured() {
         "nothing in the file names main, so it needs no EQU: {asm}"
     );
 }
+
+/// Forgetting what was seen has to forget what ran as well. Cyberun's unpacker
+/// runs code all over memory and then writes the game over it; with only the
+/// observer cleared, the export still decoded the game's bytes as instructions
+/// wherever the unpacker had been, because the record of what ran was kept.
+#[test]
+fn clearing_what_was_watched_forgets_what_ran_too() {
+    // $8000: a loop of NOPs and a JR back.
+    let mut server = start(&[(0x8000, &[0x00, 0x00, 0x18, 0xFC])]);
+    run(&mut server, 200);
+    let ran = |s: &Server| {
+        let executed = &s.session.spec.bus.tracker.executed;
+        (0..executed.len())
+            .filter(|&i| executed[i] || s.session.ran_before.get(i).copied().unwrap_or(false))
+            .count()
+    };
+    assert!(ran(&server) > 0, "the loop should have run");
+    call(
+        &mut server,
+        "watch_routines",
+        Json::obj([("clear", Json::Bool(true))]),
+    )
+    .unwrap();
+    assert_eq!(
+        ran(&server),
+        0,
+        "after clear, {} places were still recorded as having run",
+        ran(&server)
+    );
+}

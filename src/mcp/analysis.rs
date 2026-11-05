@@ -89,6 +89,11 @@ pub fn watch_routines(session: &mut Session, args: &Json) -> Result<String, Stri
     session.spec.bus.observer.enabled = on;
     if flag(args, "clear", false) {
         session.spec.bus.observer.clear();
+        // What has run is part of what was seen: the export decodes code
+        // wherever it says so, and an unpacker that ran there first and then
+        // wrote the program over itself would otherwise leave its mark.
+        session.spec.bus.tracker.executed.fill(false);
+        session.ran_before.clear();
     }
     Ok(if on {
         "Watching. Every write, read, port access and loop is now attributed to \
