@@ -948,6 +948,84 @@ fn a_recording_can_be_played_and_sought() {
     );
 }
 
+/// Loading the same recording again, or seeking back through it, is going over
+/// the same program, so what was seen running has to survive it. Loading it
+/// again built a new bus and lost the observer, and Gunfright's coverage fell
+/// from 10,016 bytes to 1,662 that way; seeking back reset the tracker the
+/// export reads without remembering it first.
+#[test]
+fn going_back_over_a_recording_keeps_what_was_seen_running() {
+    let dir = std::path::Path::new("recordings");
+    let Some(path) = std::fs::read_dir(dir).ok().and_then(|entries| {
+        let mut found: Vec<_> = entries
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|e| e == "rzx"))
+            .collect();
+        found.sort();
+        found.into_iter().next()
+    }) else {
+        eprintln!("no recordings/*.rzx here; skipping");
+        return;
+    };
+    if std::fs::read("roms/48.rom").is_err() {
+        return;
+    }
+    let path = Json::str(path.display().to_string());
+    let mut server = Server::new();
+    if call(
+        &mut server,
+        "load_recording",
+        Json::obj([("path", path.clone())]),
+    )
+    .is_err()
+    {
+        return;
+    }
+    call(&mut server, "watch_routines", Json::obj([])).unwrap();
+    call(
+        &mut server,
+        "play_recording",
+        Json::obj([("frames", Json::num(200))]),
+    )
+    .unwrap();
+    let watched = server.session.spec.bus.observer.code_runs().len();
+    let ran = |s: &Server| {
+        let tracker = &s.session.spec.bus.tracker.executed;
+        (0..tracker.len())
+            .filter(|&i| tracker[i] || s.session.ran_before.get(i).copied().unwrap_or(false))
+            .count()
+    };
+    let ran_then = ran(&server);
+    assert!(
+        watched > 0 && ran_then > 0,
+        "the recording should have run something"
+    );
+
+    call(
+        &mut server,
+        "seek_recording",
+        Json::obj([("frame", Json::num(0))]),
+    )
+    .unwrap();
+    assert!(
+        ran(&server) >= ran_then,
+        "seeking back kept {} of the {ran_then} places seen running",
+        ran(&server)
+    );
+
+    call(&mut server, "load_recording", Json::obj([("path", path)])).unwrap();
+    let kept = server.session.spec.bus.observer.code_runs().len();
+    assert!(
+        kept >= watched,
+        "loading the same recording again kept {kept} of {watched} runs of code"
+    );
+    assert!(
+        ran(&server) >= ran_then,
+        "loading again kept {} of the {ran_then} places seen running",
+        ran(&server)
+    );
+}
+
 /// The +3's drive through the server: what goes in, what is on it, and what
 /// the machine has been reading.
 #[test]

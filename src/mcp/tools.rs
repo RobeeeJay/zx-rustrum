@@ -656,7 +656,25 @@ impl Session {
             .ok_or("the recording carries no snapshot to start from")?;
         let model = snapshot::probe_model_bytes(&snap.extension, &snap.data)?;
         let rom = self.rom_for(model)?;
+        // The same recording again is the same program gone over again: what
+        // was seen running stays, as it does for restore_state. A new machine
+        // would otherwise take the observer with its old bus.
+        let name = format!("recording {}", path.display());
+        let again = self.loaded.as_deref() == Some(name.as_str());
+        let observer = if again {
+            self.remember_what_ran();
+            Some(std::mem::replace(
+                &mut self.spec.bus.observer,
+                crate::observe::Observer::new(),
+            ))
+        } else {
+            self.ran_before.clear();
+            None
+        };
         self.spec.set_model(model, &rom);
+        if let Some(observer) = observer {
+            self.spec.bus.observer = observer;
+        }
         let skipped = snapshot::load_bytes(&mut self.spec, &snap.extension, &snap.data)?;
         self.rom_loaded = true;
         self.spec.bus.playback = Some(crate::machine::Playback::default());
@@ -666,7 +684,7 @@ impl Session {
             recording,
             frame: 0,
         });
-        self.loaded = Some(format!("recording {}", path.display()));
+        self.loaded = Some(name);
         let mut out = format!(
             "{} loaded: {frames} frames on a {}. play_recording runs it.",
             path.display(),
@@ -797,6 +815,7 @@ impl Session {
                 .as_ref()
                 .and_then(|r| r.recording.snapshot.clone())
                 .ok_or("the recording carries no snapshot to start from")?;
+            self.remember_what_ran();
             snapshot::load_bytes(&mut self.spec, &snap.extension, &snap.data)?;
             self.spec.bus.playback = Some(crate::machine::Playback::default());
             if let Some(rzx) = self.rzx.as_mut() {
