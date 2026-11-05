@@ -232,11 +232,11 @@ makes the final export reproducible.
    of the bytes at its address. It should say `0 mismatches` and `0 EQUs` inside the
    range — an EQU inside means a claim or an instruction is hiding where a label
    starts. Break a copy of the file on purpose once to see it fail.
-   One mismatch in the two bytes just below SP is the .sna, not the export: the
-   format pushes PC there, while a restored state now puts back what the program
-   had (Nightshade draws with SP in its own data, and needed that). Read those two
-   bytes with `read_memory`, patch them into a copy of export.sna, and compare
-   against the copy.
+   Pass `live` in place of the .sna to compare with what the server holds now,
+   which is the state the export was just made from. Against a .sna, the two bytes
+   where that format pushes PC are reported as such and not counted: a restored
+   state puts back what the program had there (Nightshade draws with SP in its own
+   data, and needed that), so the export and the .sna differ in just those bytes.
 5. Assemble it for real if an assembler is available:
    `sjasmplus --raw=game.bin FILE.asm`, and compare `game.bin` byte for byte with
    memory FROM–TO. roundtrip.py cannot catch a mnemonic that the assembler spells
