@@ -265,6 +265,14 @@ asks for more input than it holds, or leaves some of a frame's unread, has
 come adrift, and the toolbar says so rather than letting the picture look
 authentic. `recordings/` is gitignored for the same reason as `tapes/`.
 
+**An instruction that runs past a recorded frame counts against the next.**
+A replay of the program that was recorded never does it, since the recorder
+counted whole instructions; a rebuild does, wherever an OUTI or an IX
+instruction stands where the original had something unprefixed, and dropping
+the overshoot moved every later frame a fetch on. Carried, a rebuilt Alien 8
+with its beeper made into AY writes plays the original's recording to the
+end with the same screens.
+
 **A recorded interrupt is taken at the frame boundary or not at all**, except
 after an `EI`, which holds it off one instruction. The boundary is where the
 instruction count ran out, and the line went down on the recording machine

@@ -860,3 +860,112 @@ fn the_recordings_frame_is_the_video_frame() {
         );
     }
 }
+
+/// A recording of a program, and a program that is that one with two NOPs
+/// made into an LD A,R: the same fetches, so the same keys read at the same
+/// moments, but the first frame's count now runs out between a prefix and its
+/// opcode. Frame 0 is one fetch; frame 1 holds the first IN and frame 2 the
+/// second, each where the recorded program read it.
+fn rebuilt_program_and_its_recording(dir: &std::path::Path) -> std::path::PathBuf {
+    use zx_rustrum::{rzx, snapshot};
+    let mut spec = Spectrum::new();
+    let program = [
+        0xED, 0x5F, // LD A,R: two fetches, where there were two NOPs
+        0xDB, 0xFE, // IN A,($FE)
+        0x32, 0x00, 0x90, // LD ($9000),A
+        0xDB, 0xFE, // IN A,($FE)
+        0x32, 0x01, 0x90, // LD ($9001),A
+        0x18, 0xFE, // JR $
+    ];
+    for (i, byte) in program.iter().enumerate() {
+        spec.bus.poke(0x8000 + i as u16, *byte);
+    }
+    spec.cpu.pc = 0x8000;
+    spec.cpu.sp = 0xFF00;
+    let frame = |fetches, inputs: &[u8]| rzx::Frame {
+        fetches,
+        inputs: inputs.to_vec(),
+    };
+    let recording = rzx::Recording {
+        creator: "test".to_string(),
+        snapshot: Some(rzx::Snapshot {
+            extension: "sna".to_string(),
+            data: snapshot::save_sna(&spec),
+        }),
+        later: Vec::new(),
+        frames: vec![
+            frame(1, &[]),
+            frame(3, &[0xAA]),
+            frame(1, &[0xBB]),
+            frame(30000, &[]),
+            frame(30000, &[]),
+        ],
+        start_t: 0,
+    };
+    let path = dir.join("rebuilt.rzx");
+    std::fs::write(&path, rzx::write(&recording)).expect("written");
+    path
+}
+
+/// An instruction that runs past the end of a frame counts against the next
+/// one, so the frames after it end on the fetches they were recorded on.
+/// Dropping the overshoot instead moved every later frame on by a fetch: here
+/// the second IN fell into frame 1, which had nothing left for it, and frame
+/// 2's byte was never read. A rebuilt Alien 8, its beeper made into AY writes
+/// with OUTI, read its keys on exactly the recorded fetches and still came
+/// adrift within 2,000 frames that way.
+#[test]
+fn an_instruction_past_the_end_of_a_frame_counts_against_the_next() {
+    use zx_rustrum::mcp::json::Json;
+    use zx_rustrum::mcp::tools::Session;
+    if !std::path::Path::new("roms/48.rom").exists() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("zxrs-overshoot-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("a directory");
+    let path = rebuilt_program_and_its_recording(&dir);
+
+    let mut session = Session::new();
+    session
+        .call(
+            "load_recording",
+            &Json::obj([("path", Json::str(path.to_str().unwrap()))]),
+        )
+        .expect("loaded");
+    session
+        .call("play_recording", &Json::obj([("frames", Json::num(4))]))
+        .expect("played");
+    let (first, second) = (
+        session.spec.bus.peek_raw(0x9000),
+        session.spec.bus.peek_raw(0x9001),
+    );
+    let playback = session.spec.bus.playback.as_ref().unwrap();
+    assert_eq!(
+        (first, second, playback.short, playback.unread),
+        (0xAA, 0xBB, 0, 0),
+        "the server: the two INs read ${first:02X} and ${second:02X}, with {} reads short and \
+         {} frames left unread; they should have read frame 1's $AA and frame 2's $BB",
+        playback.short,
+        playback.unread
+    );
+
+    let mut app = app();
+    app.load_path(&path);
+    assert!(app.rzx.is_some(), "it did not start: {}", app.status);
+    // A frame a call, and the recording still playing afterwards: its
+    // counts go when it ends.
+    for _ in 0..4 {
+        app.advance(1.0 / 50.0);
+    }
+    let (first, second) = (app.peek(0x9000), app.peek(0x9001));
+    let playback = app.spec.bus.playback.as_ref().unwrap();
+    assert_eq!(
+        (first, second, playback.short, playback.unread),
+        (0xAA, 0xBB, 0, 0),
+        "the window: the two INs read ${first:02X} and ${second:02X}, with {} reads short and \
+         {} frames left unread",
+        playback.short,
+        playback.unread
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

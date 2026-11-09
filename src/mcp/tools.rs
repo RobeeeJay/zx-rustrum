@@ -133,6 +133,9 @@ pub struct Session {
 pub struct Playing {
     pub recording: Recording,
     pub frame: usize,
+    /// Fetches the last frame's final instruction ran past its end, which
+    /// count against this frame: see `rzx::owed`.
+    pub carry: u32,
 }
 
 impl Default for Session {
@@ -683,6 +686,7 @@ impl Session {
         self.rzx = Some(Playing {
             recording,
             frame: 0,
+            carry: 0,
         });
         self.loaded = Some(name);
         let mut out = format!(
@@ -727,10 +731,18 @@ impl Session {
             let fetches = frame.fetches.max(1) as u32;
             let inputs = frame.inputs.clone();
             rzx.frame += 1;
+            let (ask, left) = crate::rzx::owed(fetches, rzx.carry);
             if let Some(playback) = &mut self.spec.bus.playback {
                 playback.start_frame(inputs);
             }
-            let (stop, _) = self.spec.run_fetches(fetches);
+            let (stop, done) = if ask > 0 {
+                self.spec.run_fetches(ask)
+            } else {
+                (Stop::Budget, 0)
+            };
+            if let Some(rzx) = &mut self.rzx {
+                rzx.carry = left + done.saturating_sub(ask);
+            }
             self.spec.bus.end_frame_here();
             self.spec.bus.raise_interrupt();
             ran += 1;
@@ -820,6 +832,7 @@ impl Session {
             self.spec.bus.playback = Some(crate::machine::Playback::default());
             if let Some(rzx) = self.rzx.as_mut() {
                 rzx.frame = 0;
+                rzx.carry = 0;
             }
         }
         let here = self.rzx.as_ref().expect("still loaded").frame;

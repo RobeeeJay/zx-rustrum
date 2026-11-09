@@ -72,6 +72,23 @@ impl Recording {
 /// A frame of a recording is a number of *opcode fetches* and the bytes every
 /// IN in that stretch gave back. Both are counted as the machine runs, because
 /// neither can be worked out afterwards.
+/// How many fetches of a recorded frame are still to run, given what the last
+/// frame's final instruction ran past its own end; and what is left over if
+/// that was more than this whole frame.
+///
+/// Instructions run whole, so a frame can end a fetch late when its count
+/// runs out between a prefix and its opcode. Replaying the program that was
+/// recorded, that never happens: the recorder counted whole instructions too.
+/// It happens when the program is not quite the one recorded — a rebuild with
+/// an OUTI where there was a DJNZ — and counting the overshoot against the
+/// next frame keeps every frame's end, and every IN after it, at the fetch it
+/// was recorded at. Dropping it instead moved each later frame a fetch on,
+/// and a rebuilt Alien 8 that read its keys on exactly the recorded fetches
+/// had come adrift within 2,000 frames.
+pub fn owed(fetches: u32, carry: u32) -> (u32, u32) {
+    (fetches.saturating_sub(carry), carry.saturating_sub(fetches))
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Capture {
     pub frames: Vec<Frame>,

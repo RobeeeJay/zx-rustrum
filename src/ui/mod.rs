@@ -415,6 +415,9 @@ pub struct RzxPlayback {
     /// What is left of the current frame, when a breakpoint stopped it
     /// part-way through.
     pub remaining: u32,
+    /// Fetches the last frame's final instruction ran past its end, which
+    /// count against the next: see `rzx::owed`.
+    pub carry: u32,
     /// Fractional frames carried over, so playback runs at the speed the
     /// emulator is set to rather than at whatever the host frame rate is.
     pub owed: f32,
@@ -1816,6 +1819,7 @@ impl App {
             path: path.to_path_buf(),
             frame: 0,
             remaining: 0,
+            carry: 0,
             owed: 0.0,
             visited: Default::default(),
             max_speed: false,
@@ -1890,24 +1894,33 @@ impl App {
                 return;
             }
             let whole_frame = rzx.recording.frames[rzx.frame].fetches.max(1) as u32;
+            let started = rzx.remaining > 0;
+            let (fresh, left) = crate::rzx::owed(whole_frame, rzx.carry);
+            if !started && fresh == 0 {
+                // The last frame's overshoot was the whole of this one.
+                rzx.carry = left;
+                rzx.frame += 1;
+                self.spec.bus.end_frame_here();
+                self.spec.bus.raise_interrupt();
+                continue;
+            }
             // What the budget will pay for, of the frame the recording is on.
             // A budget too small to buy a single fetch buys nothing and is
             // carried over: rounding it up to one would run a sliver of the
             // next frame after every whole one, and leave the machine a few
             // dozen instructions into a frame it has not been asked to begin.
-            let started = rzx.remaining > 0;
             let ask = if budget >= 1.0 {
                 if started {
                     rzx.remaining
                 } else {
-                    whole_frame
+                    fresh
                 }
             } else if crawling || started {
                 let piece = (budget * whole_frame as f32) as u32;
                 if started {
                     rzx.remaining.min(piece)
                 } else {
-                    piece
+                    piece.min(fresh)
                 }
             } else {
                 0
@@ -1929,10 +1942,10 @@ impl App {
                 }
                 let rzx = self.rzx.as_ref().expect("still playing");
                 let frame = &rzx.recording.frames[rzx.frame];
-                let fetches = frame.fetches as u32;
                 let inputs = frame.inputs.clone();
                 if let Some(rzx) = &mut self.rzx {
-                    rzx.remaining = fetches;
+                    rzx.remaining = fresh;
+                    rzx.carry = 0;
                 }
                 if let Some(playback) = &mut self.spec.bus.playback {
                     playback.start_frame(inputs);
@@ -1950,8 +1963,10 @@ impl App {
                 // difference off an unsigned count leaves it enormous, which
                 // ran the frame to the end of the recording and read input
                 // that was never recorded.
-                rzx.remaining = rzx.remaining.saturating_sub(ran);
+                let before = rzx.remaining;
+                rzx.remaining = before.saturating_sub(ran);
                 if rzx.remaining == 0 {
+                    rzx.carry = ran.saturating_sub(before);
                     rzx.frame += 1;
                     // Where the recording actually got to: AutoDoc reads this
                     // on top of what it can work out from the code alone.

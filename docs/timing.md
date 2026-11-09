@@ -53,10 +53,17 @@ Space Harrier and Out Run play their whole recordings in step, where before
 they parted company between frame 1,000 and frame 45,500, and the nine that
 were in step stay so (Vindicator, a zip, was checked only for the 2,000 frames the test plays).
 
-**Still open:** Lunar Jetman parts from its recording at frame 11,315 of
-132,933, Underwurlde at about 26,000 of 149,286 and Alien 8 at 132,195 of
-342,604 — all three made by SPIN, and the last of them the same under the old
-rule. Each first shows as a frame that reads one or two bytes more or less
+**Still open:** Lunar Jetman parts from its recording at frame 11,316 of
+132,933, Underwurlde at 26,132 of 149,286 and Alien 8 at 147,594 of
+342,604 — all three made by SPIN. Alien 8's used to read 132,195, before the
+overshoot was carried (see Replaying recordings); that change moved only this
+one, and it moved because the replay had already stopped being faithful. A
+probe that logged every overshoot found none at all in Alien 8's first
+131,664 frames and 3,068 after frame 131,665, which is therefore the earliest
+frame known to be out of step: 530 earlier than the first short read under
+the old rule. A faithful replay never overshoots (see below), so whatever
+happens there makes the emulator cut instructions differently from the
+machine that made the recording. Each first shows as a frame that reads one or two bytes more or less
 than was recorded, from a machine that looks ordinary, so the parting happened
 earlier and quietly. Alien 8's recording has a frame of four or five fetches
 after every long one, 171,304 of them, while the game keeps interrupts off
@@ -209,6 +216,18 @@ about that are easy to get wrong and both were:
   loses the overshoot on every piece, and a frame run in several pieces then
   thinks it has further to go. Manic Miner read 3,278 bytes of input that were
   never recorded.
+- An instruction that runs past the end of a frame counts against the next
+  frame (`rzx::owed`). The recorder counted whole instructions too, so
+  replaying the program that was recorded never overshoots at all, and
+  Jetpac, Pssst, Atic Atac, Sabre Wulf, Cookie, Tranz Am and Knight Lore play
+  the same either way. It matters when the program is not quite the one
+  recorded: a rebuilt Alien 8 whose beeper had become AY writes made with
+  OUTI read its keys on exactly the fetches the original did, and still came
+  adrift within 2,000 frames, because every frame that ended between an ED
+  and its opcode moved all the later frames a fetch on. Counting the
+  overshoot against the next frame keeps every frame's end at the fetch it
+  was recorded at. That was first tried as a possible cause of the SPIN
+  drifts below; it is not one.
 - The recording's frame is the video frame, and nothing else may end one.
   Ending frames on the T-state count as well paints the screen twice inside a
   recorded frame whenever the machine takes longer over the recorded

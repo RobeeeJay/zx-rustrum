@@ -43,6 +43,7 @@ fn playing_frames_of(speed: f32, fetches: u16) -> App {
         path: PathBuf::from("test.rzx"),
         frame: 0,
         remaining: 0,
+        carry: 0,
         owed: 0.0,
         visited: Default::default(),
         max_speed: false,
