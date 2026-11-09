@@ -10,12 +10,13 @@ pub fn tools() -> Vec<Json> {
             "lineage",
             "Place every disassembled game in a family tree, oldest first. Each game is read \
              from its .asm in disassembly/, the file export_asm writes, so a game is only in the \
-             tree once it has been disassembled. For each game: the earlier game holding the most \
-             of its code, how much, and the other relatives. Title, year and publisher come from \
+             tree once it has been disassembled. For each game: the game it hangs off, how much \
+             they share, and the other relatives. Title, year and publisher come from \
              the file's TOSEC-style name, and authors from zxdb-games.txt in the preferences \
-             directory, which tools/zxdb-games.py writes. A game only hangs off a game of an \
-             earlier year; games of the same year that share code are listed as sharing it, \
-             since within a year the order is only by title. With game, one game's relatives in \
+             directory, which tools/zxdb-games.py writes. Each game hangs off the older game it \
+             shares the most fragments with; within a year older only means earlier by title, so \
+             such a link says which came first is not known, and a link under 5% and 12 \
+             fragments is marked weak. With game, one game's relatives in \
              both directions, the techniques they share, and each of its routines found in \
              another game: an earlier one, with who is suspected of writing it, where one holds \
              it, and otherwise the same year or a later one.",
@@ -34,8 +35,8 @@ pub fn tools() -> Vec<Json> {
             "export_lineage",
             "Write the family tree of every disassembled game as one HTML page to share: the \
              tree drawn oldest first, each game with its publisher, year and authors, how much \
-             of it each relative holds, games of the same year that share code joined with no \
-             direction, and the routines it shares with suspected authors.",
+             of it each relative holds, and the routines it shares with other games, each opening \
+             to show it beside the code it matched, with suspected authors.",
             [
                 ("path", prop("string", "where to write the .html")),
                 (

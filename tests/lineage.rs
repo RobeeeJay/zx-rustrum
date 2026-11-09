@@ -321,6 +321,7 @@ fn game(title: &str, year: u16, coder: &str, grams: impl IntoIterator<Item = u64
             end: 0x8100,
             label: "engine".into(),
             instructions: grams.len() + 4,
+            text: grams.iter().map(|g| format!("LD HL,${g:04X}")).collect(),
             grams,
         }],
         techniques: BTreeMap::new(),
@@ -328,10 +329,13 @@ fn game(title: &str, year: u16, coder: &str, grams: impl IntoIterator<Item = u64
     }
 }
 
-// The tree is the point of all this: each game hangs off the earlier game it
-// holds most of, and a handful of common fragments is not a family.
+// The tree is the point of all this. Each game is joined to the game it
+// shares the most fragments with, and the family hangs from its oldest. This
+// used to leave a game unjoined when what it shared was a handful of common
+// fragments; now it is joined all the same, since every game is to be linked
+// to its strongest partner, and the link is marked weak instead.
 #[test]
-fn a_game_hangs_off_the_earlier_game_holding_its_code_and_a_few_shared_idioms_do_not_count() {
+fn a_game_hangs_off_the_game_it_shares_most_with_and_a_few_shared_idioms_are_marked_weak() {
     let tree = Lineage::new(vec![
         game("Later", 1985, "Carol", (300..400).chain(1..4)),
         game("First", 1983, "Alice", 1..101),
@@ -340,8 +344,13 @@ fn a_game_hangs_off_the_earlier_game_holding_its_code_and_a_few_shared_idioms_do
     let titles: Vec<&str> = tree.games.iter().map(|g| g.game.title.as_str()).collect();
     assert_eq!(titles, vec!["First", "Second", "Later"], "oldest first");
 
-    let link = &tree.links[tree.parent[1].expect("Second should have a parent")];
-    assert_eq!(link.earlier, 0, "Second's code came from First");
+    assert_eq!(tree.parent_game(0), None, "the oldest is the root");
+    assert_eq!(
+        tree.parent_game(1),
+        Some(0),
+        "Second's code came from First"
+    );
+    let link = &tree.links[tree.parent[1].unwrap()];
     // Fragments 1-3 are in all three games and count for 2/3 each; 4-40 are in
     // two and count whole. Second's mass is 3*2/3 + 37 + 61 = 100, of which 39
     // is shared.
@@ -350,48 +359,120 @@ fn a_game_hangs_off_the_earlier_game_holding_its_code_and_a_few_shared_idioms_do
         "share was {}",
         link.of_later
     );
-    assert_eq!(
-        tree.parent[2], None,
-        "three common fragments are not a family"
+    assert!(!tree.weak(link), "39% is a family: {link:?}");
+    let later = &tree.links[tree.parent[2].expect("Later should be joined to something")];
+    assert!(
+        tree.weak(later),
+        "three common fragments are joined but marked weak: {later:?}"
     );
 }
 
-// Within a year the games are only in title order, which says nothing about
-// which came out first; letting that order pick a parent made Gunfright
-// Nightshade's parent because G comes before N, though by the usual accounts
-// Nightshade came out first. Two games of a year share code with no arrow between them.
+// Each game hangs off the older game it shares the most fragments with, so
+// the tree reads down in age. Joining each game to its strongest partner of
+// any age was tried, and through weak links it hung Knight Lore under Alien 8
+// under Pentagram under Martianoids.
 #[test]
-fn games_of_the_same_year_are_relatives_and_neither_hangs_off_the_other() {
+fn every_game_hangs_off_the_older_game_it_shares_most_fragments_with() {
+    let tree = Lineage::new(vec![
+        game("A", 1983, "Ann", 1..101),
+        game("B", 1984, "Bob", (1..21).chain(500..600)),
+        game("C", 1985, "Cid", (500..590).chain(1..60).chain(700..720)),
+        game("D", 1986, "Dee", (500..505).chain(1..5).chain(700..705)),
+        game("E", 1986, "Eve", 2000..2100),
+    ]);
+    let parents: Vec<Option<&str>> = (0..tree.games.len())
+        .map(|g| {
+            tree.parent_game(g)
+                .map(|p| tree.games[p].game.title.as_str())
+        })
+        .collect();
+    // C shares 59 fragments with A and 110 with B, so B. D shares 4 with A, 9
+    // with B and 14 with C, so C. E shares nothing, so it stands alone.
+    assert_eq!(
+        parents,
+        vec![None, Some("A"), Some("B"), Some("C"), None],
+        "each game's parent is the older game it shares most with"
+    );
+    for g in 0..tree.games.len() {
+        if let Some(p) = tree.parent_game(g) {
+            assert!(p < g, "a parent is older than its child: {p} above {g}");
+        }
+    }
+}
+
+// Within a year the games are only in title order, which says nothing about
+// which came out first. Joined in the tree they still are, since they share
+// the most, but the link has no direction, and the words say so rather than
+// "N% of its code is in" the one the alphabet put first.
+#[test]
+fn games_of_the_same_year_are_joined_without_saying_which_came_first() {
     let tree = Lineage::new(vec![
         game("Beta", 1985, "Bob", (1..61).chain(200..240)),
         game("Alpha", 1985, "Ann", 1..101),
     ]);
-    assert_eq!(
-        tree.parent,
-        vec![None, None],
-        "title order must not make Alpha Beta's parent"
-    );
-    assert_eq!(
-        tree.kin.len(),
-        1,
-        "the pair should be relatives: {:?}",
-        tree.links
-    );
-    let link = &tree.links[tree.kin[0]];
+    let beta = tree.index_of("Beta").unwrap();
+    let link = &tree.links[tree.parent[beta].expect("the two are joined")];
     assert!(
         link.same_year && !link.ordered,
         "a same-year link has no direction: {link:?}"
+    );
+    assert!(
+        tree.kin.is_empty(),
+        "a link in the tree is not listed again beside it"
     );
 }
 
 // A year that is not known says nothing about order either.
 #[test]
-fn a_game_with_no_year_hangs_off_nothing() {
+fn a_game_with_no_year_is_joined_without_a_direction() {
     let mut undated = game("Undated", 1984, "Bob", 1..61);
     undated.game.year = None;
     let tree = Lineage::new(vec![game("Dated", 1983, "Ann", 1..101), undated]);
-    assert_eq!(tree.parent, vec![None, None], "no year, no direction");
-    assert_eq!(tree.kin.len(), 1, "but they are related: {:?}", tree.links);
+    let link = &tree.links[tree.parent[1].expect("the two are joined")];
+    assert!(!link.ordered, "no year, no direction: {link:?}");
+    assert!(!tree.came_before(0, 1) && !tree.came_before(1, 0));
+}
+
+// A routine and the block it was found in are shown side by side, lined up
+// by shape: the same instruction with other numbers is a pair, and what one
+// side has that the other lacks stands alone, so an edit reads as an edit.
+#[test]
+fn the_diff_of_two_blocks_lines_up_the_same_shapes_and_marks_the_rest() {
+    let a: Vec<String> = ["LD A,$01", "INC A", "RET"].map(String::from).to_vec();
+    let b: Vec<String> = ["LD A,$05", "DEC A", "INC A", "RET"]
+        .map(String::from)
+        .to_vec();
+    use lineage::Diff::*;
+    assert_eq!(
+        lineage::diff(&a, &b),
+        vec![
+            Both("LD A,$01".into(), "LD A,$05".into()),
+            Right("DEC A".into()),
+            Both("INC A".into(), "INC A".into()),
+            Both("RET".into(), "RET".into()),
+        ]
+    );
+}
+
+// On the page, each routine found in another game opens to show it beside the
+// block of that game holding the most of it.
+#[test]
+fn a_found_routine_opens_to_show_it_beside_its_match() {
+    let mut first = game("First", 1983, "Alice", 1..61);
+    first.blocks[0].text[5] = "JP (HL)".into();
+    let tree = Lineage::new(vec![first, game("Second", 1984, "Bob", 1..101)]);
+    let html = zx_rustrum::mcp::lineage::page(&tree);
+    assert!(
+        html.contains(
+            "Side by side: <code>$8000</code> engine here, <code>$8000</code> engine in Second"
+        ),
+        "the routine's row should open to a diff:\n{}",
+        &html[html.find("Routines found").unwrap_or(0)..]
+    );
+    assert!(
+        html.contains("<tr class=\"left\"><td>JP (HL)</td><td></td></tr>"),
+        "the line only First has stands alone"
+    );
 }
 
 // The first game of a family used to show none of its code anywhere, because
@@ -509,11 +590,12 @@ fn a_disassembly_that_cannot_be_read_is_named_not_left_out_quietly() {
     );
 }
 
-// The pair that showed the fault: Gunfright and Nightshade are both 1985, and
-// Nightshade is usually said to have come out first; the old title order made
-// Gunfright the parent all the same.
+// The pair that showed the fault: Gunfright and Nightshade are both 1985.
+// Nightshade is usually said to have come out first, but title order made
+// Gunfright the parent and said "43% of its code is in Gunfright". They share
+// the most with each other, so they are joined, with no direction claimed.
 #[test]
-fn nightshade_and_gunfright_are_relatives_with_neither_drawn_as_the_parent() {
+fn nightshade_and_gunfright_are_joined_without_either_drawn_as_the_source() {
     let needed = [
         "roms/48.rom",
         "disassembly/Gunfright (1985)(Ultimate Play The Game).asm",
@@ -534,12 +616,24 @@ fn nightshade_and_gunfright_are_relatives_with_neither_drawn_as_the_parent() {
         .collect();
     assert!(
         wrong.is_empty(),
-        "a same-year game drawn as a parent: {wrong:?}"
+        "a same-year game drawn as the source: {wrong:?}"
+    );
+    let joined: Vec<&str> = tree
+        .lines()
+        .filter(|l| {
+            (l.contains("Nightshade —") && l.contains("with Gunfright, of the same year"))
+                || (l.contains("Gunfright —") && l.contains("with Nightshade, of the same year"))
+        })
+        .collect();
+    assert_eq!(
+        joined.len(),
+        1,
+        "the two should be joined, which first not known:\n{tree}"
     );
     assert!(
-        tree.lines()
-            .any(|l| l.contains("shares code with 1985 Nightshade")),
-        "Gunfright should list Nightshade as a same-year relative:\n{tree}"
+        joined[0].contains("which came first is not known"),
+        "{}",
+        joined[0]
     );
 }
 

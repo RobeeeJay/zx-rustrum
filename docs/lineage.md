@@ -91,30 +91,54 @@ came from that one?"
 
 ### The Tree
 
-Games are put in order by year, then by title. A game hangs off the game of an
-*earlier year* holding the biggest share of it, as long as that game holds at
-least 5% of it and at least twelve fragments. Below that, the game is a root
-with no known parent. Other earlier-year games that pass the same bar are drawn
-as dashed lines.
+Games are put in order by year, then by title. Each game hangs off the **older
+game it shares the most fragments with**: a plain count of fragments in common,
+not the weighted share. Since a parent is always older than its child, the tree
+reads down in age and no cycle is possible. Every game that shares anything with
+an older one is joined to it, so the whole collection can be one tree.
 
-Two games of the same year, or a pair where either year isn't known, are never
-parent and child. If either holds at least 5% of the other's code, and they
-share at least twelve fragments, they're listed as **sharing code**: in the text,
-a line under each game saying how much of its code is in the other; on the page,
-a dotted line with no direction to it.
+Two things are said about each branch rather than left to the picture:
 
-The time order is what makes it a tree. Since a parent always comes from an
-earlier year, no cycle is possible.
+- **Which way the code went.** If the game above is from an earlier year, the
+  branch says how much of the lower game's code is in it: "58% of its code is in
+  Knight Lore". If it's from the same year, "older" only means earlier in the
+  alphabet, so the branch says how much each holds of the other and that which
+  came first isn't known. On the page that branch is dotted.
+- **Whether it's worth anything.** A branch under 5% of either game's code, or
+  twelve fragments, is marked **weak**: it may be no more than idioms any Z80
+  programmer would write. On the page it's faint and dashed. Skool Daze hangs off
+  Pssst on 11 fragments, for instance, and says so.
 
-Earlier versions let a game of the same year be the parent, and marked the link
-"same year". That was wrong, because within a year the order is only the title's,
-so the alphabet chose the parent. Gunfright came out as Nightshade's parent,
-"43% of its code is in Gunfright", because G comes before N, though by the usual
-accounts Nightshade was released first (ZXDB gives both only the year, so that
-isn't something the tools can know). Atic Atac headed the 1983 games for the same reason. The
-mark said the order wasn't known, but the tree had already drawn it. Now the pair
-shows from both sides instead: 34% of Gunfright is in Nightshade and 43% of
-Nightshade is in Gunfright, with no arrow.
+Other older games holding at least 5% of a game are drawn as dashed lines to the
+right. Other games of the same year that share at least that much are listed
+under each game, and drawn as dotted lines.
+
+This rule has changed twice, and both earlier versions were wrong in ways worth
+recording.
+
+The first version hung a game off the older game holding the biggest weighted
+share of it, if that was at least 5% and twelve fragments, and left it as a root
+otherwise. Within a year the order is only by title, so the alphabet chose the
+parent. Gunfright came out as Nightshade's parent, "43% of its code is in
+Gunfright", because G comes before N, though by the usual accounts Nightshade
+was released first (ZXDB gives both only the year, so that isn't something the
+tools can know). The link was marked "same year", but the tree had already drawn
+it one way.
+
+The second version stopped same-year games being parent and child at all, and
+listed them as sharing code instead. That fixed the wording, but left thirteen
+of the nineteen games as roots, joined to nothing.
+
+On the way to the present rule, a maximum spanning tree was tried, joining every
+game to its strongest partner whatever its age. Through weak links it hung
+Knight Lore under Alien 8 under Pentagram under Martianoids: the wrong way up.
+Keeping the parent older is what keeps the tree in age order, and the strong
+pairs still meet, because the younger game of each picks the older one.
+
+One consequence of counting fragments rather than shares: Pentagram now hangs
+off Alien 8 (1,545 fragments, 40%) rather than Knight Lore (1,537, 41%). The two
+are within a whisker of each other on either measure, and Knight Lore's link is
+still drawn as a dashed line.
 
 ### Where a Routine Came From
 
@@ -125,6 +149,15 @@ listed under the name the disassembly gives it. Ties go to the earlier game.
 That's the earliest game *in this collection* holding it, which isn't always
 the game it was first written for. The collection only knows what has been
 disassembled.
+
+On the page, each of those routines opens to show it beside the block of the
+other game holding the most of its fragments. The two are lined up by
+instruction shape, the same way fragments are compared. A line in both with the
+same text is plain; the same instruction with different numbers is tinted, since
+that's code moved with its tables; and a line only one side has stands alone, so
+an edit reads as an edit. The block shown is the other game's single best match.
+A routine whose fragments are spread over several of that game's blocks is shown
+beside only one of them.
 
 Only if no earlier-year game holds half of it are the other games looked in:
 the same year, a later year, or no year known. Each is labelled with which of

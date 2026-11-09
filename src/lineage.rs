@@ -164,6 +164,9 @@ pub struct Block {
     pub label: String,
     pub instructions: usize,
     pub grams: Vec<u64>,
+    /// Each instruction in the emulator's spelling, so a block can be shown
+    /// beside the one it matches in another game.
+    pub text: Vec<String>,
 }
 
 impl Block {
@@ -484,6 +487,7 @@ fn from_runs(
             label: label(start).unwrap_or_default(),
             instructions: run.len(),
             grams,
+            text: run.iter().map(|l| l.text.clone()).collect(),
         });
     }
     Fingerprint {
@@ -632,11 +636,11 @@ pub struct Lineage {
     pub games: Vec<Fingerprint>,
     /// Every pair holding a fragment in common.
     pub links: Vec<Link>,
-    /// For each game, the link to the earlier game it holds most of, if it
-    /// holds enough of one to count.
+    /// For each game, the link to the game above it in the tree, if any: the
+    /// older game it shares the most fragments with.
     pub parent: Vec<Option<usize>>,
-    /// Links strong enough to count that have no direction: the two games are
-    /// of one year, or one has no year, so neither can be the other's parent.
+    /// Links strong enough to count that have no direction, the two games of
+    /// one year or one with no year, and that are not in the tree.
     pub kin: Vec<usize>,
     sets: Vec<HashSet<u64>>,
     weight: HashMap<u64, f64>,
@@ -652,6 +656,79 @@ fn weight(df: usize) -> f64 {
     } else {
         2.0 / df as f64
     }
+}
+
+/// The order links are taken in, strongest first: the most fragments shared,
+/// then the larger shares, then the older pair, so ties fall the same way every
+/// time.
+fn stronger(links: &[Link], a: usize, b: usize) -> std::cmp::Ordering {
+    let (x, y) = (&links[a], &links[b]);
+    y.shared
+        .cmp(&x.shared)
+        .then((y.of_later + y.of_earlier).total_cmp(&(x.of_later + x.of_earlier)))
+        .then((x.earlier, x.later).cmp(&(y.earlier, y.later)))
+}
+
+/// Each game hangs off the older game it shares the most fragments with, so
+/// a parent is always above its child in age and no cycle can form. "Older" is
+/// the order games are sorted in, year and then title, so within a year it is
+/// the title's order and the link says nothing about which came first. A
+/// maximum spanning tree was tried first, to join every game to its strongest
+/// partner whatever its age; through weak links it hung Knight Lore under
+/// Alien 8 under Pentagram under Martianoids, the wrong way up.
+fn tree_of(games: usize, links: &[Link]) -> Vec<Option<usize>> {
+    (0..games)
+        .map(|game| {
+            (0..links.len())
+                .filter(|i| links[*i].later == game)
+                .min_by(|a, b| stronger(links, *a, *b))
+        })
+        .collect()
+}
+
+/// One line of two blocks set side by side.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Diff {
+    /// The same instruction shape in both, each as its game spells it.
+    Both(String, String),
+    /// Only in the first block.
+    Left(String),
+    /// Only in the second.
+    Right(String),
+}
+
+/// Two blocks lined up by instruction shape, the longest common run of
+/// shapes kept side by side and the rest marked as one side's own. Shapes,
+/// not text, so `LD H,$B7` and `LD H,$C2` line up, as the fragments do.
+pub fn diff(a: &[String], b: &[String]) -> Vec<Diff> {
+    let sa: Vec<String> = a.iter().map(|t| read::shape(t)).collect();
+    let sb: Vec<String> = b.iter().map(|t| read::shape(t)).collect();
+    let (n, m) = (sa.len(), sb.len());
+    let mut len = vec![vec![0u32; m + 1]; n + 1];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            len[i][j] = if sa[i] == sb[j] {
+                len[i + 1][j + 1] + 1
+            } else {
+                len[i + 1][j].max(len[i][j + 1])
+            };
+        }
+    }
+    let (mut i, mut j, mut out) = (0, 0, Vec::new());
+    while i < n || j < m {
+        if i < n && j < m && sa[i] == sb[j] {
+            out.push(Diff::Both(a[i].clone(), b[j].clone()));
+            i += 1;
+            j += 1;
+        } else if j < m && (i == n || len[i][j + 1] >= len[i + 1][j]) {
+            out.push(Diff::Right(b[j].clone()));
+            j += 1;
+        } else {
+            out.push(Diff::Left(a[i].clone()));
+            i += 1;
+        }
+    }
+    out
 }
 
 impl Lineage {
@@ -700,26 +777,15 @@ impl Lineage {
                 });
             }
         }
-        let parent = (0..games.len())
-            .map(|game| {
-                links
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, l)| {
-                        l.later == game
-                            && l.ordered
-                            && l.of_later >= MIN_SHARE
-                            && l.shared >= MIN_SHARED
-                    })
-                    .max_by(|(_, a), (_, b)| a.of_later.total_cmp(&b.of_later))
-                    .map(|(i, _)| i)
-            })
-            .collect();
+        let parent = tree_of(games.len(), &links);
         let kin = links
             .iter()
             .enumerate()
-            .filter(|(_, l)| {
-                !l.ordered && l.of_later.max(l.of_earlier) >= MIN_SHARE && l.shared >= MIN_SHARED
+            .filter(|(i, l)| {
+                !l.ordered
+                    && l.of_later.max(l.of_earlier) >= MIN_SHARE
+                    && l.shared >= MIN_SHARED
+                    && !parent.contains(&Some(*i))
             })
             .map(|(i, _)| i)
             .collect();
@@ -764,6 +830,43 @@ impl Lineage {
     /// The weight of one fragment, for whatever wants to explain a number.
     pub fn weight_of(&self, gram: u64) -> f64 {
         self.weight.get(&gram).copied().unwrap_or(0.0)
+    }
+
+    /// The game above this one in the tree.
+    pub fn parent_game(&self, game: usize) -> Option<usize> {
+        self.parent[game].map(|i| {
+            let l = &self.links[i];
+            if l.earlier == game {
+                l.later
+            } else {
+                l.earlier
+            }
+        })
+    }
+
+    /// A link too slight to be called a family: under the share and the
+    /// fragment count a parent used to need. Every game is joined to its
+    /// strongest partner all the same, and a weak link says so.
+    pub fn weak(&self, link: &Link) -> bool {
+        link.of_later.max(link.of_earlier) < MIN_SHARE || link.shared < MIN_SHARED
+    }
+
+    /// The block of `from` holding the most of block `block` of `game`'s
+    /// fragments: what it is shown beside.
+    pub fn counterpart(&self, game: usize, block: usize, from: usize) -> Option<usize> {
+        let wanted: HashSet<u64> = self.games[game].blocks[block]
+            .grams
+            .iter()
+            .copied()
+            .collect();
+        self.games[from]
+            .blocks
+            .iter()
+            .enumerate()
+            .map(|(i, b)| (i, b.grams.iter().filter(|g| wanted.contains(g)).count()))
+            .filter(|(_, n)| *n > 0)
+            .max_by(|(a, x), (b, y)| x.cmp(y).then(b.cmp(a)))
+            .map(|(i, _)| i)
     }
 
     /// Whether `a` came out before `b` by the dates: both years known and
