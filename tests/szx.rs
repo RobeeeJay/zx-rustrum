@@ -125,6 +125,32 @@ fn the_paging_comes_back() {
     assert_eq!(back.bus.rom_in_use(), 1);
 }
 
+/// A machine whose paging was locked comes back locked. 48K software run on a
+/// 128K is run with the lock on, and some of it writes to ports that the 128K
+/// takes for $7FFD: Alien 8 reads its keyboard after OUT ($FD),A with $7E in
+/// A, which unlocked would page bank 6 in under its stack.
+#[test]
+fn a_machine_with_its_paging_locked_comes_back_locked() {
+    use zx_rustrum::z80::Bus;
+
+    let mut spec = Spectrum::with_model(Model::Spectrum128);
+    spec.bus.io_write(0x7FFD, 0x30);
+    let bytes = szx::save(&spec);
+
+    let mut back = Spectrum::with_model(Model::Spectrum128);
+    szx::load(&mut back, &bytes).expect("loaded");
+    assert!(
+        back.bus.paging_locked,
+        "page register ${:02X} has the lock bit, so the paging is locked",
+        back.bus.page_reg
+    );
+    back.bus.io_write(0x7EFD, 0x7E);
+    assert_eq!(
+        back.bus.page_reg, 0x30,
+        "a write to $7FFD after loading is ignored, as it was before saving"
+    );
+}
+
 /// A block this emulator has no use for is stepped over, and named rather than
 /// lost quietly: a file from another emulator loads, and what could not be
 /// put back is said out loud.

@@ -211,6 +211,9 @@ fn read_spcr(spec: &mut Spectrum, d: &[u8]) -> Result<(), String> {
     spec.bus.border = d[0] & 7;
     if spec.bus.model.has_paging() {
         spec.bus.page_reg = d[1];
+        // Bit 5 is the lock, and a register that says locked with paging
+        // that is not lets a 48K program page its own stack away.
+        spec.bus.paging_locked = d[1] & 0x20 != 0;
         if spec.bus.model.has_plus3_paging() {
             spec.bus.page_reg_1ffd = d[2];
         }
