@@ -592,3 +592,33 @@ fn a_reset_says_why_the_keyboard_is_deaf_for_a_moment() {
         h.state().status
     );
 }
+
+// File → Load snapshot… now goes through load_path, which is what this runs:
+// the menu used to switch the machine itself and then hand the file to a
+// loader that knew only .sna and .z80, so a .szx said "unsupported snapshot
+// type". The menu opens a file dialog and cannot be clicked in a test; the
+// loader is tested on its own in tests/szx.rs.
+#[test]
+fn a_szx_snapshot_loads_into_the_machine_it_is_of() {
+    let mut machine = Spectrum::with_model(Model::Spectrum128);
+    machine.cpu.pc = 0x9ABC;
+    machine.bus.poke(0xC123, 0x77);
+    let path = std::env::temp_dir().join(format!("zxrs-ui-{}.szx", std::process::id()));
+    std::fs::write(&path, zx_rustrum::szx::save(&machine)).unwrap();
+
+    let mut h = harness();
+    h.run_steps(3);
+    assert_eq!(h.state().spec.bus.model, Model::Spectrum48);
+    h.state_mut().load_path(&path);
+    let _ = std::fs::remove_file(&path);
+    let app = h.state();
+    assert_eq!(
+        app.spec.bus.model,
+        Model::Spectrum128,
+        "status: {}",
+        app.status
+    );
+    assert_eq!(app.spec.cpu.pc, 0x9ABC, "status: {}", app.status);
+    assert_eq!(app.spec.bus.peek_raw(0xC123), 0x77);
+    assert!(app.status.starts_with("Loaded"), "{}", app.status);
+}

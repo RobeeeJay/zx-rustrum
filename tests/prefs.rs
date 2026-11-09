@@ -150,6 +150,7 @@ fn file_kinds_are_recognised_by_extension() {
         ("a.tap", Some(FileKind::Tape)),
         ("a.z80", Some(FileKind::Snapshot)),
         ("a.sna", Some(FileKind::Snapshot)),
+        ("a.szx", Some(FileKind::Snapshot)),
         ("a.txt", None),
         ("a", None),
     ];

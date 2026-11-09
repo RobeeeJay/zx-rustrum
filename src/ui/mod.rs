@@ -2118,29 +2118,20 @@ impl App {
                 },
                 Err(e) => self.set_status(format!("{}: {e}", path.display()), true),
             },
-            "szx" => match std::fs::read(path) {
-                Ok(bytes) => match crate::szx::probe_model(&bytes) {
-                    Ok(model) => {
-                        self.switch_model(model);
-                        match crate::szx::load(&mut self.spec, &bytes) {
-                            Ok(note) => {
-                                self.prefs.remember_file(FileKind::Snapshot, path);
-                                self.set_status(format!("Loaded {}: {note}", path.display()), false)
-                            }
-                            Err(e) => self.set_status(format!("Snapshot load failed: {e}"), true),
-                        }
-                    }
-                    Err(e) => self.set_status(format!("Snapshot load failed: {e}"), true),
-                },
-                Err(e) => self.set_status(format!("{}: {e}", path.display()), true),
-            },
-            "sna" | "z80" => match snapshot::probe_model(path) {
+            // A .szx says which machine it is inside; the others by their size
+            // and header. What a .szx could not put back is said with it.
+            "sna" | "z80" | "szx" => match snapshot::probe_model(path) {
                 Ok(model) => {
                     self.switch_model(model);
                     match snapshot::load(&mut self.spec, path) {
-                        Ok(()) => {
+                        Ok(note) => {
                             self.prefs.remember_file(FileKind::Snapshot, path);
-                            self.set_status(format!("Loaded {}", path.display()), false)
+                            let note = if note.is_empty() {
+                                String::new()
+                            } else {
+                                format!(": {note}")
+                            };
+                            self.set_status(format!("Loaded {}{note}", path.display()), false)
                         }
                         Err(e) => self.set_status(format!("Snapshot load failed: {e}"), true),
                     }
@@ -3651,18 +3642,7 @@ impl App {
                 }
                 if ui.button("Load snapshot…").clicked() {
                     if let Some(path) = self.pick_file(Some(FileKind::Snapshot)) {
-                        match snapshot::probe_model(&path) {
-                            Ok(model) => {
-                                self.switch_model(model);
-                                match snapshot::load(&mut self.spec, &path) {
-                                    Ok(()) => self.status = format!("Loaded {}", path.display()),
-                                    Err(e) => {
-                                        self.set_status(format!("Snapshot load failed: {e}"), true)
-                                    }
-                                }
-                            }
-                            Err(e) => self.set_status(format!("Snapshot load failed: {e}"), true),
-                        }
+                        self.load_path(&path);
                     }
                     ui.close();
                 }

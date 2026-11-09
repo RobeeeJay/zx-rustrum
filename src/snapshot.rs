@@ -145,19 +145,16 @@ pub fn save_sna(spec: &Spectrum) -> Vec<u8> {
     out
 }
 
-pub fn load(spec: &mut Spectrum, path: &std::path::Path) -> Result<(), String> {
+/// Load a snapshot file, of any kind there is a loader for. What comes back is
+/// what a .szx could not put back, if anything.
+pub fn load(spec: &mut Spectrum, path: &std::path::Path) -> Result<String, String> {
     let data = std::fs::read(path).map_err(|e| e.to_string())?;
-    match path
+    let kind = path
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("")
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "sna" => load_sna(spec, &data),
-        "z80" => load_z80(spec, &data),
-        other => Err(format!("unsupported snapshot type: .{other}")),
-    }
+        .to_ascii_lowercase();
+    load_bytes(spec, &kind, &data)
 }
 
 pub fn load_sna(spec: &mut Spectrum, d: &[u8]) -> Result<(), String> {

@@ -100,7 +100,7 @@ fn load_cli_files(
                 }
                 Err(e) => *status = format!("Tape load failed: {e}"),
             },
-            "sna" | "z80" => {
+            "sna" | "z80" | "szx" => {
                 if let Ok(model) = snapshot::probe_model(&path) {
                     if model != spec.bus.model {
                         if let Some(rom) = roms.for_model(model) {
@@ -109,7 +109,7 @@ fn load_cli_files(
                     }
                 }
                 match snapshot::load(spec, &path) {
-                    Ok(()) => *status = format!("Loaded {}", path.display()),
+                    Ok(_) => *status = format!("Loaded {}", path.display()),
                     Err(e) => *status = format!("Snapshot load failed: {e}"),
                 }
             }

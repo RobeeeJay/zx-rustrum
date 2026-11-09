@@ -231,3 +231,22 @@ fn the_mcp_server_writes_and_reads_it() {
     .expect("loaded");
     assert!(out.contains("$1234"), "and the machine comes back: {out}");
 }
+
+// The Load snapshot… menu, the command line and the MCP server's
+// restore_state all load by path through snapshot::load, which knew only .sna
+// and .z80: a .szx chosen from the menu said "unsupported snapshot type".
+#[test]
+fn a_szx_loads_by_its_path_as_well_as_by_its_bytes() {
+    let mut spec = machine(Model::Spectrum128);
+    spec.cpu.pc = 0x8123;
+    spec.bus.poke(0xC000, 0x5A);
+    let path = std::env::temp_dir().join(format!("zxrs-szx-path-{}.szx", std::process::id()));
+    std::fs::write(&path, szx::save(&spec)).unwrap();
+
+    let mut back = machine(Model::Spectrum128);
+    let loaded = zx_rustrum::snapshot::load(&mut back, &path);
+    let _ = std::fs::remove_file(&path);
+    assert!(loaded.is_ok(), "{loaded:?}");
+    assert_eq!(back.cpu.pc, 0x8123);
+    assert_eq!(back.bus.peek_raw(0xC000), 0x5A);
+}
