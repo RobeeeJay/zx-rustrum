@@ -91,28 +91,57 @@ came from that one?"
 
 ### The Tree
 
-Games are put in order by year, then by title. A game hangs off the earlier
-game holding the biggest share of it, as long as that game holds at least 5% of
-it and at least twelve fragments. Below that, the game is a root with no known
-parent. Other earlier games that pass the same bar are drawn as dashed lines.
+Games are put in order by year, then by title. A game hangs off the game of an
+*earlier year* holding the biggest share of it, as long as that game holds at
+least 5% of it and at least twelve fragments. Below that, the game is a root
+with no known parent. Other earlier-year games that pass the same bar are drawn
+as dashed lines.
 
-The time order is what makes it a tree. Since a parent always comes first, no
-cycle is possible. But within a single year the order is only by title, so a
-link between two games of the same year is marked as such. Which of the two
-came first isn't known.
+Two games of the same year, or a pair where either year isn't known, are never
+parent and child. If either holds at least 5% of the other's code, and they
+share at least twelve fragments, they're listed as **sharing code**: in the text,
+a line under each game saying how much of its code is in the other; on the page,
+a dotted line with no direction to it.
+
+The time order is what makes it a tree. Since a parent always comes from an
+earlier year, no cycle is possible.
+
+Earlier versions let a game of the same year be the parent, and marked the link
+"same year". That was wrong, because within a year the order is only the title's,
+so the alphabet chose the parent. Gunfright came out as Nightshade's parent,
+"43% of its code is in Gunfright", because G comes before N, though by the usual
+accounts Nightshade was released first (ZXDB gives both only the year, so that
+isn't something the tools can know). Atic Atac headed the 1983 games for the same reason. The
+mark said the order wasn't known, but the tree had already drawn it. Now the pair
+shows from both sides instead: 34% of Gunfright is in Nightshade and 43% of
+Nightshade is in Gunfright, with no arrow.
 
 ### Where a Routine Came From
 
-For each run of a game's code, the tools find the earlier game holding the most
-of its fragments. If that's at least half of them, the routine is said to be
-**found in** that game, and it's listed under the name the disassembly gives
-it. Ties go to the earlier game.
-
+For each run of a game's code, the tools look for a game holding at least half
+of its fragments. Games of earlier years are looked in first, and the one
+holding the most is named: the routine is **found in** that game, and it's
+listed under the name the disassembly gives it. Ties go to the earlier game.
 That's the earliest game *in this collection* holding it, which isn't always
 the game it was first written for. The collection only knows what has been
 disassembled.
 
-The **suspected author** is the person who may have coded that earlier game and
+Only if no earlier-year game holds half of it are the other games looked in:
+the same year, a later year, or no year known. Each is labelled with which of
+those it is. A later game holding the routine says the code was shared, not
+where it came from, so no suspected author is given for one.
+
+Until this was changed, only earlier games were looked in. So the first game of
+a family showed almost none of its code anywhere: 2% of Knight Lore, though
+Alien 8 holds three-quarters of it. Measured over the nineteen games in
+`disassembly/` with a Python copy of this search (it finds the tool's 121 blocks
+of Alien 8, but leaves out the ROM and loader filters, so take the figures as
+close rather than exact), Knight Lore's share of code found in
+another game went from 2.0% to 74.0%, Atic Atac's from 0% to 18.3%, and
+Gunfright's from 5.5% to 39.8%. The last games of each family didn't move,
+since there was nothing later to find them in.
+
+The **suspected author** is the person who may have coded an earlier game and
 isn't credited with coding this one. "May have coded" means credited with Code,
 or credited with nothing in particular, which is how ZXDB lists the one
 programmer of many early games. It's a guess, and it's marked as one (`@` in the
@@ -183,7 +212,7 @@ You should see:
 ```
 
 With `game`, you also get that game's relatives in both directions, the
-techniques they share, and its routines found in earlier games, under their own
+techniques they share, and its routines found in other games, under their own
 names: Alien 8's `place_valves` has 83 of its 90 fragments in Knight Lore, for
 instance. `export_lineage` writes the same thing as one self-contained HTML
 page with nothing loaded from anywhere, so it can be passed around. A

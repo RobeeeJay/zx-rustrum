@@ -609,11 +609,16 @@ pub struct Link {
     /// The same the other way round.
     pub of_earlier: f64,
     pub same_year: bool,
+    /// Whether the dates say which came first: both years known and different.
+    /// Only such a link can make a parent; within a year, or without a year,
+    /// the order is the title's and says nothing.
+    pub ordered: bool,
     /// Techniques both use.
     pub techniques: Vec<String>,
 }
 
-/// Where a block of one game is found first among the games before it.
+/// Where a block of one game is found: in an earlier game if one holds it,
+/// since that can say where it came from, and otherwise in any other.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Origin {
     pub block: usize,
@@ -630,6 +635,9 @@ pub struct Lineage {
     /// For each game, the link to the earlier game it holds most of, if it
     /// holds enough of one to count.
     pub parent: Vec<Option<usize>>,
+    /// Links strong enough to count that have no direction: the two games are
+    /// of one year, or one has no year, so neither can be the other's parent.
+    pub kin: Vec<usize>,
     sets: Vec<HashSet<u64>>,
     weight: HashMap<u64, f64>,
 }
@@ -684,6 +692,10 @@ impl Lineage {
                     of_later: shared_mass / masses[later].max(1e-9),
                     of_earlier: shared_mass / masses[earlier].max(1e-9),
                     same_year: games[earlier].game.year == games[later].game.year,
+                    ordered: matches!(
+                        (games[earlier].game.year, games[later].game.year),
+                        (Some(a), Some(b)) if a < b
+                    ),
                     techniques,
                 });
             }
@@ -694,16 +706,28 @@ impl Lineage {
                     .iter()
                     .enumerate()
                     .filter(|(_, l)| {
-                        l.later == game && l.of_later >= MIN_SHARE && l.shared >= MIN_SHARED
+                        l.later == game
+                            && l.ordered
+                            && l.of_later >= MIN_SHARE
+                            && l.shared >= MIN_SHARED
                     })
                     .max_by(|(_, a), (_, b)| a.of_later.total_cmp(&b.of_later))
                     .map(|(i, _)| i)
             })
             .collect();
+        let kin = links
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| {
+                !l.ordered && l.of_later.max(l.of_earlier) >= MIN_SHARE && l.shared >= MIN_SHARED
+            })
+            .map(|(i, _)| i)
+            .collect();
         Lineage {
             games,
             links,
             parent,
+            kin,
             sets,
             weight,
         }
@@ -742,37 +766,49 @@ impl Lineage {
         self.weight.get(&gram).copied().unwrap_or(0.0)
     }
 
-    /// For each block of a game with most of its fragments in an earlier game,
-    /// the earliest game holding the most of them. Earliest in the corpus, which
-    /// is not the same as where it was first written.
+    /// Whether `a` came out before `b` by the dates: both years known and
+    /// different. Within a year the order is only the title's.
+    pub fn came_before(&self, a: usize, b: usize) -> bool {
+        matches!(
+            (self.games[a].game.year, self.games[b].game.year),
+            (Some(x), Some(y)) if x < y
+        )
+    }
+
+    /// For each block of a game with at least half its fragments in another
+    /// game: the game holding the most of them, looked for first among games
+    /// of earlier years, since only those can say where it came from, and
+    /// otherwise among all the rest, which can say it was shared but not which
+    /// way. Ties go to the earlier game in the corpus, which is not the same as
+    /// where it was first written.
     pub fn origins(&self, game: usize) -> Vec<Origin> {
         let mut out = Vec::new();
         for (index, block) in self.games[game].blocks.iter().enumerate() {
             if block.grams.is_empty() {
                 continue;
             }
-            let best = (0..game)
-                .map(|from| {
-                    (
-                        from,
-                        block
-                            .grams
-                            .iter()
-                            .filter(|g| self.sets[from].contains(g))
-                            .count(),
-                    )
-                })
-                .filter(|(_, found)| *found > 0)
-                .max_by(|(a, x), (b, y)| x.cmp(y).then(b.cmp(a)));
+            let found_in = |from: usize| {
+                block
+                    .grams
+                    .iter()
+                    .filter(|g| self.sets[from].contains(g))
+                    .count()
+            };
+            let best_of = |from: &mut dyn Iterator<Item = usize>| {
+                from.map(|f| (f, found_in(f)))
+                    .filter(|(_, found)| *found > 0 && found * 2 >= block.grams.len())
+                    .max_by(|(a, x), (b, y)| x.cmp(y).then(b.cmp(a)))
+            };
+            let others = 0..self.games.len();
+            let best = best_of(&mut others.clone().filter(|f| self.came_before(*f, game)))
+                .or_else(|| best_of(&mut others.filter(|f| *f != game)));
             if let Some((from, found)) = best {
-                if found * 2 >= block.grams.len() {
-                    out.push(Origin {
-                        block: index,
-                        from,
-                        found,
-                        of: block.grams.len(),
-                    });
-                }
+                out.push(Origin {
+                    block: index,
+                    from,
+                    found,
+                    of: block.grams.len(),
+                });
             }
         }
         out

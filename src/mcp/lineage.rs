@@ -133,6 +133,42 @@ fn children(tree: &Lineage) -> Vec<Vec<usize>> {
     kids
 }
 
+/// Where `other` stands in time against `game`, in words.
+fn relation(tree: &Lineage, game: usize, other: usize) -> &'static str {
+    if tree.came_before(other, game) {
+        "earlier"
+    } else if tree.came_before(game, other) {
+        "later"
+    } else if tree.games[game].game.year.is_some()
+        && tree.games[game].game.year == tree.games[other].game.year
+    {
+        "same year"
+    } else {
+        "year not known"
+    }
+}
+
+/// The relatives of `game` with no direction to them, each as the other game
+/// and how much of each one's code the other holds, this game's first.
+fn kin_of(tree: &Lineage, game: usize) -> Vec<(usize, f64, f64, &lineage::Link)> {
+    let mut out: Vec<_> = tree
+        .kin
+        .iter()
+        .map(|i| &tree.links[*i])
+        .filter_map(|l| {
+            if l.later == game {
+                Some((l.earlier, l.of_later, l.of_earlier, l))
+            } else if l.earlier == game {
+                Some((l.later, l.of_earlier, l.of_later, l))
+            } else {
+                None
+            }
+        })
+        .collect();
+    out.sort_by(|a, b| b.1.total_cmp(&a.1));
+    out
+}
+
 fn draw_tree(
     tree: &Lineage,
     kids: &[Vec<usize>],
@@ -176,6 +212,23 @@ fn draw_tree(
     } else {
         format!("{prefix}{}", if last { "   " } else { "│  " })
     };
+    let bar = if kids[game].is_empty() {
+        "   "
+    } else {
+        "│  "
+    };
+    for (other, mine, theirs, _) in kin_of(tree, game) {
+        let o = &tree.games[other].game;
+        out.push_str(&format!(
+            "{next}{bar}· shares code with {} {}: {} of its code is there, {} of {}'s is here ({}: which came first is not known)\n",
+            year(o),
+            o.title,
+            percent(mine),
+            percent(theirs),
+            o.title,
+            relation(tree, game, other)
+        ));
+    }
     for (i, child) in kids[game].iter().enumerate() {
         draw_tree(
             tree,
@@ -196,8 +249,10 @@ pub fn lineage(session: &mut Session, args: &Json) -> Result<String, String> {
     let mut out = format!(
         "{} games disassembled in {}, oldest first. A share is how much of the later game's \
          code is also in the earlier one: fragments of {} instructions, a fragment that many \
-         games hold counting for less. Within a year the order is by title and says nothing \
-         about which came first.\n\n",
+         games hold counting for less. A game only hangs off a game of an earlier year: \
+         within a year the order is by title and says nothing about which came first, so \
+         games of the same year that share code are listed under each other as sharing it, \
+         with no direction.\n\n",
         tree.games.len(),
         dir.display(),
         lineage::GRAM
@@ -285,23 +340,28 @@ fn about(tree: &Lineage, game: usize) -> String {
     }
     let origins = tree.origins(game);
     out.push_str(&format!(
-        "\nRoutines found in an earlier game ({} of {} runs that have fragments). The earliest \
-         in this collection, which is not always where it was first written. A suspected author \
-         is a guess, from who coded the earlier game.\n",
+        "\nRoutines found in another game ({} of {} runs that have fragments). An earlier game \
+         holding one is named first: the earliest in this collection holding the most of it, \
+         which is not always where it was first written. Otherwise it is a game of the same year \
+         or a later one, which says the code was shared but not which way it went. A suspected \
+         author is a guess, from who coded an earlier game, and is only given for one.\n",
         origins.len(),
         print.blocks.iter().filter(|b| !b.grams.is_empty()).count()
     ));
     for origin in origins.iter().take(40) {
         let block = &print.blocks[origin.block];
         let from = &tree.games[origin.from].game;
+        let when = relation(tree, game, origin.from);
         let suspected = tree.suspected(game, origin.from);
-        let who = if suspected.is_empty() {
-            "the same coders".to_string()
+        let who = if when != "earlier" {
+            String::new()
+        } else if suspected.is_empty() {
+            " — the same coders".to_string()
         } else {
-            format!("@suspected {}", suspected.join(", "))
+            format!(" — @suspected {}", suspected.join(", "))
         };
         out.push_str(&format!(
-            "  ${:04X} {:<20} {}/{} fragments in {} ({}) — {who}\n",
+            "  ${:04X} {:<20} {}/{} fragments in {} ({}, {when}){who}\n",
             block.start,
             block.name(),
             origin.found,
@@ -342,10 +402,12 @@ pub fn export_lineage(session: &mut Session, args: &Json) -> Result<String, Stri
     std::fs::write(&path, page(&tree)).map_err(|e| format!("{}: {e}", path.display()))?;
     let roots = tree.parent.iter().filter(|p| p.is_none()).count();
     Ok(format!(
-        "Wrote {}: {} games, {} links drawn as branches, {roots} with no earlier relative.{}",
+        "Wrote {}: {} games, {} links drawn as branches, {roots} with no earlier relative, \
+         {} pairs of the same year drawn as sharing code.{}",
         path.display(),
         tree.games.len(),
         tree.games.len() - roots,
+        tree.kin.len(),
         notes.iter().map(|n| format!("\n{n}")).collect::<String>()
     ))
 }
@@ -390,7 +452,13 @@ pub fn page(tree: &Lineage) -> String {
     let side = GUTTER + deepest as f32 * INDENT + CARD_W + 20.0;
     for (index, link) in tree.links.iter().enumerate() {
         let branch = tree.parent[link.later] == Some(index);
-        if branch || link.of_later < lineage::MIN_SHARE || link.shared < lineage::MIN_SHARED {
+        let kin = tree.kin.contains(&index);
+        if branch
+            || !kin
+                && (!link.ordered
+                    || link.of_later < lineage::MIN_SHARE
+                    || link.shared < lineage::MIN_SHARED)
+        {
             continue;
         }
         let (y1, y2) = (
@@ -398,13 +466,36 @@ pub fn page(tree: &Lineage) -> String {
             y_of(link.later) + CARD_H / 2.0,
         );
         let reach = side + 20.0 + (y2 - y1).abs().sqrt() * 6.0;
+        let (class, words) = if kin {
+            (
+                "kin",
+                format!(
+                    "{} and {} share code, and which came first is not known: {} of {}'s is in {}, {} of {}'s in {}",
+                    escape(&tree.games[link.earlier].game.title),
+                    escape(&tree.games[link.later].game.title),
+                    percent(link.of_later),
+                    escape(&tree.games[link.later].game.title),
+                    escape(&tree.games[link.earlier].game.title),
+                    percent(link.of_earlier),
+                    escape(&tree.games[link.earlier].game.title),
+                    escape(&tree.games[link.later].game.title)
+                ),
+            )
+        } else {
+            (
+                "other",
+                format!(
+                    "{} holds {} of {}'s code",
+                    escape(&tree.games[link.earlier].game.title),
+                    percent(link.of_later),
+                    escape(&tree.games[link.later].game.title)
+                ),
+            )
+        };
         svg.push_str(&format!(
-            "<path class=\"other\" d=\"M{side} {y1} C{reach} {y1} {reach} {y2} {side} {y2}\" \
-             stroke-width=\"{:.1}\"><title>{} holds {} of {}'s code</title></path>\n",
-            1.0 + link.of_later * 4.0,
-            escape(&tree.games[link.earlier].game.title),
-            percent(link.of_later),
-            escape(&tree.games[link.later].game.title)
+            "<path class=\"{class}\" d=\"M{side} {y1} C{reach} {y1} {reach} {y2} {side} {y2}\" \
+             stroke-width=\"{:.1}\"><title>{words}</title></path>\n",
+            1.0 + link.of_later.max(link.of_earlier) * 4.0,
         ));
     }
     for (game, _) in &order {
@@ -458,8 +549,10 @@ pub fn page(tree: &Lineage) -> String {
          <p class=\"lede\">{} games, oldest first within each family. A branch goes to the \
          earlier game holding the most of a game's code, and its number is how much: fragments \
          of {} instructions from each game's disassembly, the ROM's own taken out, a fragment many games hold counting \
-         for less. Dashed lines on the right are other earlier games holding at least {} of it. \
-         Within a year the order is by title and says nothing about which came first.</p>\n\
+         for less. A branch only goes to a game of an earlier year. Dashed lines on the right \
+         are other earlier games holding at least {} of it; dotted ones join games of the same \
+         year that share code, since within a year the order is by title and says nothing \
+         about which came first.</p>\n\
          <div class=\"tree\">{svg}</div>\n{details}</main>\n</body>\n</html>\n",
         tree.games.len(),
         lineage::GRAM,
@@ -533,19 +626,22 @@ fn game_section(tree: &Lineage, game: usize) -> String {
     let origins = tree.origins(game);
     if !origins.is_empty() {
         out.push_str(
-            "<details><summary>Routines found in an earlier game</summary>\n\
-             <p class=\"small\">The earliest game in this collection holding most of the routine, \
-             which is not always where it was first written. A suspected author is a guess from \
-             who coded that game, and is only given where they are not credited with this one.</p>\n\
-             <table><thead><tr><th>Routine</th><th>Fragments found</th><th>Earliest in</th>\
+            "<details><summary>Routines found in another game</summary>\n\
+             <p class=\"small\">An earlier game holding most of the routine is named first: the \
+             earliest in this collection, which is not always where it was first written. Otherwise \
+             it is a game of the same year or a later one, which says the code was shared but not \
+             which way it went. A suspected author is a guess from who coded an earlier game, and \
+             is only given where they are not credited with this one.</p>\n\
+             <table><thead><tr><th>Routine</th><th>Fragments found</th><th>Found in</th>\
              <th>Suspected author</th></tr></thead><tbody>\n",
         );
         for origin in &origins {
             let block = &print.blocks[origin.block];
             let from = &tree.games[origin.from].game;
+            let when = relation(tree, game, origin.from);
             let suspected = tree.suspected(game, origin.from);
             out.push_str(&format!(
-                "<tr><td><code>${:04X}</code> {}</td><td>{}/{}</td><td><a href=\"#g{}\">{}</a> ({})</td><td>{}</td></tr>\n",
+                "<tr><td><code>${:04X}</code> {}</td><td>{}/{}</td><td><a href=\"#g{}\">{}</a> ({}, {when})</td><td>{}</td></tr>\n",
                 block.start,
                 escape(&block.label),
                 origin.found,
@@ -553,7 +649,9 @@ fn game_section(tree: &Lineage, game: usize) -> String {
                 origin.from,
                 escape(&from.title),
                 year(from),
-                if suspected.is_empty() {
+                if when != "earlier" {
+                    "<span class=\"small\">not a source</span>".to_string()
+                } else if suspected.is_empty() {
                     "<span class=\"small\">the same coders</span>".to_string()
                 } else {
                     format!("<em>{}</em>", escape(&suspected.join(", ")))
@@ -602,6 +700,7 @@ a:hover .card { stroke: var(--accent); }
 .share { fill: var(--branch); font-size: 11px; font-weight: 600; }
 .branch { fill: none; stroke: var(--branch); }
 .other { fill: none; stroke: var(--other); stroke-dasharray: 4 3; opacity: 0.8; }
+.kin { fill: none; stroke: var(--branch); stroke-dasharray: 1 3; stroke-linecap: round; }
 section { border-top: 1px solid var(--line); padding: 16px 0; }
 table { border-collapse: collapse; width: 100%; font-size: 0.85rem; margin: 8px 0;
   display: block; overflow-x: auto; }

@@ -356,6 +356,77 @@ fn a_game_hangs_off_the_earlier_game_holding_its_code_and_a_few_shared_idioms_do
     );
 }
 
+// Within a year the games are only in title order, which says nothing about
+// which came out first; letting that order pick a parent made Gunfright
+// Nightshade's parent because G comes before N, though by the usual accounts
+// Nightshade came out first. Two games of a year share code with no arrow between them.
+#[test]
+fn games_of_the_same_year_are_relatives_and_neither_hangs_off_the_other() {
+    let tree = Lineage::new(vec![
+        game("Beta", 1985, "Bob", (1..61).chain(200..240)),
+        game("Alpha", 1985, "Ann", 1..101),
+    ]);
+    assert_eq!(
+        tree.parent,
+        vec![None, None],
+        "title order must not make Alpha Beta's parent"
+    );
+    assert_eq!(
+        tree.kin.len(),
+        1,
+        "the pair should be relatives: {:?}",
+        tree.links
+    );
+    let link = &tree.links[tree.kin[0]];
+    assert!(
+        link.same_year && !link.ordered,
+        "a same-year link has no direction: {link:?}"
+    );
+}
+
+// A year that is not known says nothing about order either.
+#[test]
+fn a_game_with_no_year_hangs_off_nothing() {
+    let mut undated = game("Undated", 1984, "Bob", 1..61);
+    undated.game.year = None;
+    let tree = Lineage::new(vec![game("Dated", 1983, "Ann", 1..101), undated]);
+    assert_eq!(tree.parent, vec![None, None], "no year, no direction");
+    assert_eq!(tree.kin.len(), 1, "but they are related: {:?}", tree.links);
+}
+
+// The first game of a family used to show none of its code anywhere, because
+// only earlier games were looked in. A block a later game holds is found there,
+// and an earlier game holding it still wins, since that can say where it came
+// from.
+#[test]
+fn a_routine_is_found_in_a_later_game_when_no_earlier_one_holds_it() {
+    let tree = Lineage::new(vec![
+        game("First", 1983, "Alice", 1..61),
+        game("Second", 1984, "Bob", 1..101),
+    ]);
+    let origins = tree.origins(0);
+    assert_eq!(
+        origins.len(),
+        1,
+        "First's routine is in Second: {origins:?}"
+    );
+    assert_eq!(origins[0].from, 1, "found in the later game");
+    assert!(tree.came_before(0, 1) && !tree.came_before(1, 0));
+
+    let tree = Lineage::new(vec![
+        game("Middle", 1984, "Bob", 1..61),
+        game("Early", 1983, "Alice", 1..41),
+        game("Late", 1985, "Carol", 1..61),
+    ]);
+    let middle = tree.index_of("Middle").unwrap();
+    let origins = tree.origins(middle);
+    assert_eq!(origins.len(), 1, "{origins:?}");
+    assert_eq!(
+        tree.games[origins[0].from].game.title, "Early",
+        "an earlier game holding half beats a later one holding all"
+    );
+}
+
 #[test]
 fn a_routine_from_someone_elses_game_names_them_as_a_suspected_author() {
     let tree = Lineage::new(vec![
@@ -435,6 +506,40 @@ fn a_disassembly_that_cannot_be_read_is_named_not_left_out_quietly() {
     assert!(
         tree.contains("Bad (1985)(Somebody).asm was not read") && tree.contains("line 2"),
         "the unreadable file and why should be named:\n{tree}"
+    );
+}
+
+// The pair that showed the fault: Gunfright and Nightshade are both 1985, and
+// Nightshade is usually said to have come out first; the old title order made
+// Gunfright the parent all the same.
+#[test]
+fn nightshade_and_gunfright_are_relatives_with_neither_drawn_as_the_parent() {
+    let needed = [
+        "roms/48.rom",
+        "disassembly/Gunfright (1985)(Ultimate Play The Game).asm",
+        "disassembly/Nightshade (1985)(Ultimate Play The Game).asm",
+    ];
+    if needed.iter().any(|f| std::fs::metadata(f).is_err()) {
+        eprintln!("need {needed:?}; skipping");
+        return;
+    }
+    let mut server = Server::new();
+    let tree = call(&mut server, "lineage", Json::obj([])).unwrap();
+    let wrong: Vec<&str> = tree
+        .lines()
+        .filter(|l| {
+            (l.contains("Nightshade —") && l.contains("of its code is in Gunfright"))
+                || (l.contains("Gunfright —") && l.contains("of its code is in Nightshade"))
+        })
+        .collect();
+    assert!(
+        wrong.is_empty(),
+        "a same-year game drawn as a parent: {wrong:?}"
+    );
+    assert!(
+        tree.lines()
+            .any(|l| l.contains("shares code with 1985 Nightshade")),
+        "Gunfright should list Nightshade as a same-year relative:\n{tree}"
     );
 }
 
