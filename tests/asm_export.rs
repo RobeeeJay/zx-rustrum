@@ -221,6 +221,52 @@ fn the_python_assembler_gives_back_the_same_bytes() {
     );
 }
 
+/// `DEFS $D200-$` is how a rebuilt game keeps a table on its page. When what
+/// comes before it has grown past the address, the count is negative, and
+/// taking that as nothing moved Alien 8's buffer and stack 168 bytes up
+/// without a word. Running past $FFFF was let through the same way.
+#[test]
+fn the_python_assembler_refuses_space_that_counts_backwards() {
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("no python3; skipping");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("zxrs-z80asm-defs-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (src, bin) = (dir.join("program.asm"), dir.join("program.bin"));
+    let refusal = |source: &str| {
+        std::fs::write(&src, source).unwrap();
+        let run = std::process::Command::new("python3")
+            .arg("tools/z80asm.py")
+            .arg(&src)
+            .arg(&bin)
+            .arg("--mcp")
+            .arg(env!("CARGO_BIN_EXE_mcp"))
+            .output()
+            .expect("python3 runs");
+        (
+            run.status.success(),
+            format!(
+                "{}{}",
+                String::from_utf8_lossy(&run.stdout),
+                String::from_utf8_lossy(&run.stderr)
+            ),
+        )
+    };
+    let (ok, said) = refusal("        ORG $8000\n        DEFB 1,2,3\n        DEFS $8002-$\n");
+    assert!(!ok && said.contains("backwards"), "{said}");
+    let (ok, said) =
+        refusal("        ORG $8000\n        DEFB 1,2\n        DEFS $8002-$\n        NOP\n");
+    assert!(ok, "a DEFS of nothing is fine: {said}");
+    let (ok, said) = refusal("        ORG $FFFE\n        DEFB 1,2,3\n");
+    assert!(!ok && said.contains("past $FFFF"), "{said}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A real program: Border Break, loaded through the ROM and left running so
 /// its code has run, assembles back into the same 48K.
 #[test]

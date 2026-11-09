@@ -242,13 +242,21 @@ class Assembler:
                         args = split_args(rest)
                         count = self.value(args[0], pc, final)
                         fill = self.value(args[1], pc, final) if len(args) > 1 else 0
-                        out = [fill & 255] * count
+                        # DEFS $D200-$ is how a rebuild keeps what follows on
+                        # its page; counted backwards, what comes before has
+                        # grown past it, and a silent nothing moved it.
+                        if final and count < 0:
+                            raise ValueError(f"DEFS runs {-count} bytes backwards at ${pc:04X}: "
+                                             "what comes before it is too long")
+                        out = [fill & 255] * max(count, 0)
                     else:
                         out = self.encode(l, pc, final)
                         starts.append((pc, number))
                 except ValueError as e:
                     raise SystemExit(f"line {number}: {e}")
                 self.listing.append((number, pc, len(out)))
+                if final and pc + len(out) > 0x10000:
+                    raise SystemExit(f"line {number}: runs past $FFFF")
                 for i, b in enumerate(out):
                     if final and pc + i in image:
                         raise SystemExit(f"line {number}: ${pc + i:04X} is written twice")
