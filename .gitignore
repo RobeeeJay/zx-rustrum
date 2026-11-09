@@ -13,6 +13,9 @@
 /disassembly/*
 !/disassembly/.gitkeep
 
+# And what is rebuilt from a disassembly: still the game's code.
+/assemblies/
+
 .DS_Store
 *.afdesign~lock~
 recordings/

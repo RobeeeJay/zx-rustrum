@@ -140,6 +140,87 @@ fn the_source_assembles_back_into_the_same_bytes() {
     );
 }
 
+/// tools/z80asm.py, the assembler that learns its encodings from the
+/// emulator's own disassembler, gives back the same bytes too. It is what the
+/// rebuilt games in assemblies/ are made with, where no sjasmplus is
+/// installed, so it has to be right about every instruction an export writes.
+#[test]
+fn the_python_assembler_gives_back_the_same_bytes() {
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("no python3; skipping");
+        return;
+    }
+    let (spec, notes) = awkward();
+    let out = asmexport::from_machine(&spec, &notes, None, "awkward");
+    let dir = std::env::temp_dir().join(format!("zxrs-z80asm-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (src, bin) = (dir.join("program.asm"), dir.join("program.bin"));
+    std::fs::write(&src, &out.text).unwrap();
+    let run = std::process::Command::new("python3")
+        .arg("tools/z80asm.py")
+        .arg(&src)
+        .arg(&bin)
+        .arg("--mcp")
+        .arg(env!("CARGO_BIN_EXE_mcp"))
+        .output()
+        .expect("python3 runs");
+    assert!(
+        run.status.success(),
+        "z80asm.py refused it:\n{}\n{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let bytes = std::fs::read(&bin).unwrap();
+
+    // DD CB d op decodes as BIT n,(IX+d) whatever the low three bits of op
+    // are, so the disassembler alone would have the assembler pick whichever
+    // it met first. Only the ones with 6 there are documented, and the first
+    // build of Alien 8 came out with 54 bytes wrong this way. The export above
+    // has none of these, so they are written out here with what they must be.
+    let index = "        ORG $8000\n        BIT 0,(IX+$10)\n        SET 3,(IY-$02)\n        \
+                 RES 7,(IX+$7F)\n        RLC (IY+$00)\n        SRL (IX+$01)\n";
+    std::fs::write(&src, index).unwrap();
+    let run = std::process::Command::new("python3")
+        .arg("tools/z80asm.py")
+        .arg(&src)
+        .arg(&bin)
+        .arg("--mcp")
+        .arg(env!("CARGO_BIN_EXE_mcp"))
+        .output()
+        .expect("python3 runs");
+    assert!(
+        run.status.success(),
+        "{}",
+        String::from_utf8_lossy(&run.stdout)
+    );
+    let got = std::fs::read(&bin).unwrap();
+    let want = [
+        0xDD, 0xCB, 0x10, 0x46, 0xFD, 0xCB, 0xFE, 0xDE, 0xDD, 0xCB, 0x7F, 0xBE, 0xFD, 0xCB, 0x00,
+        0x06, 0xDD, 0xCB, 0x01, 0x3E,
+    ];
+    assert_eq!(
+        got, want,
+        "the documented encodings of the index-register bit instructions"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let memory: Vec<u8> = (0x4000..=0xFFFFu16).map(|a| spec.bus.peek_raw(a)).collect();
+    assert_eq!(bytes.len(), memory.len(), "49,152 bytes from $4000");
+    let first = bytes.iter().zip(&memory).position(|(a, b)| a != b);
+    assert_eq!(
+        first,
+        None,
+        "first difference at ${:04X}: assembled ${:02X}, memory ${:02X}",
+        first.unwrap_or(0) + 0x4000,
+        first.map(|i| bytes[i]).unwrap_or(0),
+        first.map(|i| memory[i]).unwrap_or(0)
+    );
+}
+
 /// A real program: Border Break, loaded through the ROM and left running so
 /// its code has run, assembles back into the same 48K.
 #[test]

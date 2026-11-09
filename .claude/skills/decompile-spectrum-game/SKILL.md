@@ -240,9 +240,16 @@ makes the final export reproducible.
 5. Assemble it for real if an assembler is available:
    `sjasmplus --raw=game.bin FILE.asm`, and compare `game.bin` byte for byte with
    memory FROM–TO. roundtrip.py cannot catch a mnemonic that the assembler spells
-   differently, only this can. If no assembler is installed, say that this step was
-   not done rather than calling the file proven. Don't fetch and build one without
-   asking.
+   differently, only this can. Without sjasmplus, `python3 tools/z80asm.py FILE.asm
+   game.bin --map game.map` does the same job: it takes its encodings from the
+   emulator's disassembler and is checked by `tests/asm_export.rs`. Say which was
+   used. Don't fetch and build another without asking.
+
+   To rebuild a game from its disassembly (code moved, routines changed) and check
+   it against somebody's play, `tools/rzx_snapshot.py put` swaps the snapshot in a
+   recording for one of the rebuild and keeps the input. A rebuild that makes the
+   same fetches between its key reads plays the recording to the same screens;
+   assemblies/ has Alien 8 done that way.
 
 ## 7. The pictures that go with it
 
