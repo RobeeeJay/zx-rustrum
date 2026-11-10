@@ -78,6 +78,12 @@ const FIRST_PASS: u16 = 128;
 fn play_by_pass(snap: &str, map: &str, passes: usize) -> Vec<Vec<u8>> {
     let mut spec = machine(snap);
     start_a_game(&mut spec);
+    play_on(spec, map, passes, FIRST_PASS, true)
+}
+
+/// The same from a machine already in a game, from the pass `first` on,
+/// walking or with the controls left alone.
+fn play_on(mut spec: Spectrum, map: &str, passes: usize, first: u16, walk: bool) -> Vec<Vec<u8>> {
     let end_of_pass = address(map, "end_of_pass");
     let list = address(map, "l_C745");
     let mut out = Vec::new();
@@ -85,7 +91,7 @@ fn play_by_pass(snap: &str, map: &str, passes: usize) -> Vec<Vec<u8>> {
     let mut since = 0u64;
     let mut last = None;
     while out.len() < passes {
-        let walking = if out.is_empty() {
+        let walking = if out.is_empty() || !walk {
             (0, 7) // nothing
         } else {
             WALK[out.len() / 30 % WALK.len()]
@@ -104,7 +110,7 @@ fn play_by_pass(snap: &str, map: &str, passes: usize) -> Vec<Vec<u8>> {
         // An interrupt taken at end_of_pass comes back to it, so the same
         // pass is seen there twice; each pass is kept once, by its count.
         let count = u16::from_le_bytes([spec.bus.peek_raw(0x5B02), spec.bus.peek_raw(0x5B03)]);
-        if spec.cpu.pc == end_of_pass && count >= FIRST_PASS && last != Some(count) {
+        if spec.cpu.pc == end_of_pass && count >= first && last != Some(count) {
             last = Some(count);
             since = steps;
             let mut state: Vec<u8> = (0x4000..0x5B00).map(|a| spec.bus.peek_raw(a)).collect();
@@ -495,4 +501,117 @@ fn the_scan_marks_the_same_objects() {
             .count();
     }
     assert!(marked > 100, "only {marked} objects were newly marked");
+}
+
+/// A build with the game's state from `sna` (the original, at end_of_pass)
+/// carried into it: the screen, the variables and objects, and the buffer.
+fn busy_machine(sna: &[u8], snap: &str, map: &str) -> Spectrum {
+    let mut spec = machine(snap);
+    for a in (0x4000..0x6288u32).chain(0xD200..0xEA00) {
+        spec.bus.poke(a as u16, sna[27 + a as usize - 0x4000]);
+    }
+    // The original game's pointers into its own draw list; both builds set
+    // them before they read them.
+    let list = address(map, "l_C745");
+    for at in [0x5B2B, 0x5B2D, 0x5B2F] {
+        spec.bus.poke(at, list as u8);
+        spec.bus.poke(at + 1, (list >> 8) as u8);
+    }
+    spec.bus.set_joystick(zx_rustrum::joystick::Kind::Kempston);
+    spec.cpu.pc = address(map, "end_of_pass");
+    spec.cpu.sp = 0xF100;
+    spec.cpu.i = 0xEC;
+    spec.cpu.im = 2;
+    spec.cpu.iff1 = true;
+    spec.cpu.iff2 = true;
+    spec
+}
+
+const BUSY: [u32; 3] = [45_000, 50_000, 90_000];
+
+// The first room has few objects in it, and walking about never leaves it,
+// so three busy rooms are taken from the original's recording too
+// (assemblies/busy_states.py), each at end_of_pass. Only the game's state is
+// carried into each build: the screen, the variables and objects, and the
+// buffer, since a rebuilt game's code is not where the original's was. The
+// recording was played with a Kempston joystick, which has to be fitted:
+// without one, the game reads the floating bus, whose value depends on the
+// timing, which is exactly what differs between the builds.
+#[test]
+fn the_faster_build_plays_the_same_game_in_busy_rooms() {
+    let frames = BUSY;
+    let states: Vec<String> = frames
+        .iter()
+        .map(|f| format!("assemblies/out/busy{f}.sna"))
+        .collect();
+    let mut need: Vec<&str> = states.iter().map(String::as_str).collect();
+    need.extend([FREE, FAST, FREE_MAP, FAST_MAP, "roms/128.rom"]);
+    if !have(&need) {
+        return;
+    }
+    for (frame, state) in frames.iter().zip(&states) {
+        let sna = std::fs::read(state).unwrap();
+        let free = play_on(busy_machine(&sna, FREE, FREE_MAP), FREE_MAP, 120, 0, false);
+        let fast = play_on(busy_machine(&sna, FAST, FAST_MAP), FAST_MAP, 120, 0, false);
+        assert_eq!(
+            (free.len(), fast.len()),
+            (120, 120),
+            "from frame {frame} of the recording, the game stopped making passes"
+        );
+        for (pass, (a, b)) in free.iter().zip(&fast).enumerate() {
+            if let Some(at) = a.iter().zip(b).position(|(x, y)| x != y) {
+                panic!(
+                    "from frame {frame} of the recording, pass {pass}: ${:04X} is ${:02X} in the \
+                     free build and ${:02X} in the faster one",
+                    0x4000 + at,
+                    a[at],
+                    b[at]
+                );
+            }
+        }
+    }
+}
+
+// What the changes are for. In a busy room a pass takes ten frames, and the
+// game's only pacing is a busy-wait, so less time a pass is a faster game.
+// Measured: 7% less in the room at frame 45,000, 15% less at 90,000.
+#[test]
+fn a_busy_room_takes_less_time_a_pass() {
+    let states: Vec<String> = BUSY
+        .iter()
+        .map(|f| format!("assemblies/out/busy{f}.sna"))
+        .collect();
+    let mut need: Vec<&str> = states.iter().map(String::as_str).collect();
+    need.extend([FREE, FAST, FREE_MAP, FAST_MAP, "roms/128.rom"]);
+    if !have(&need) {
+        return;
+    }
+    for (frame, state) in BUSY.iter().zip(&states) {
+        let sna = std::fs::read(state).unwrap();
+        let time = |snap: &str, map: &str| {
+            let mut spec = busy_machine(&sna, snap, map);
+            let end_of_pass = address(map, "end_of_pass");
+            let (mut seen, mut last, mut from) = (0, None, 0);
+            while seen < 61 {
+                spec.step_instruction();
+                let count =
+                    u16::from_le_bytes([spec.bus.peek_raw(0x5B02), spec.bus.peek_raw(0x5B03)]);
+                if spec.cpu.pc == end_of_pass && last != Some(count) {
+                    last = Some(count);
+                    seen += 1;
+                    if seen == 1 {
+                        from = spec.bus.total_t();
+                    }
+                }
+            }
+            spec.bus.total_t() - from
+        };
+        let (free, fast) = (time(FREE, FREE_MAP), time(FAST, FAST_MAP));
+        let ratio = fast as f64 / free as f64;
+        assert!(
+            ratio < 0.95,
+            "from frame {frame}: sixty passes took {free} T-states in the free build and {fast} in \
+             the faster one, {ratio:.3} of the time"
+        );
+    }
 }
