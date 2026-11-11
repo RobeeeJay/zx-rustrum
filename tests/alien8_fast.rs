@@ -15,6 +15,8 @@ const FREE: &str = "assemblies/out/free fixed.szx";
 const FAST: &str = "assemblies/out/fast fixed.szx";
 const FREE_MAP: &str = "assemblies/out/free fixed.map";
 const FAST_MAP: &str = "assemblies/out/fast fixed.map";
+const PACED: &str = "assemblies/out/paced fixed.szx";
+const PACED_MAP: &str = "assemblies/out/paced fixed.map";
 
 fn have(files: &[&str]) -> bool {
     let missing: Vec<_> = files
@@ -482,15 +484,9 @@ fn the_scan_marks_the_same_objects() {
             let flags: Vec<u8> = (0..56)
                 .map(|i| spec.bus.peek_raw(0x5B88 + 32 * i + 7))
                 .collect();
-            after.push((
-                flags,
-                spec.cpu.d,
-                spec.cpu.e,
-                spec.cpu.h,
-                spec.cpu.l,
-                spec.cpu.iy,
-                spec.cpu.b,
-            ));
+            // DE and HL are not left as the old scan left them: nothing after
+            // it reads them before loading them.
+            after.push((flags, spec.cpu.iy, spec.cpu.b));
         }
         assert_eq!(
             after[0], after[1],
@@ -613,5 +609,144 @@ fn a_busy_room_takes_less_time_a_pass() {
             "from frame {frame}: sixty passes took {free} T-states in the free build and {fast} in \
              the faster one, {ratio:.3} of the time"
         );
+    }
+}
+
+// The sprite drawer reads a sprite with POP, SP inside it, and had
+// interrupts off for the whole of each sprite: 30% of them were lost, which
+// made the sound late and the pacing count frames short. The faster build
+// takes them inside sprites too, on a stack of its own, putting back the two
+// bytes the return address lands on. Nearly every frame has to have its
+// interrupt now, some of them taken inside a sprite, and nothing drawn may
+// differ, which the pass-for-pass tests see to.
+#[test]
+fn interrupts_are_taken_inside_sprites_and_none_are_lost() {
+    if !have(&[FAST, FAST_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let tick = address(FAST_MAP, "ay_tick");
+    let saved = address(FAST_MAP, "ay_int_sp");
+    let mut spec = machine(FAST);
+    start_a_game(&mut spec);
+    let frame = u64::from(spec.bus.model.frame_t());
+    let (mut taken, mut in_sprites) = (0, 0);
+    for i in 0..40 {
+        let (row, bit) = WALK[i % WALK.len()];
+        key(&mut spec, row, bit, true);
+        let end = spec.bus.total_t() + 25 * frame;
+        while spec.bus.total_t() < end {
+            spec.step_instruction();
+            if spec.cpu.pc == tick {
+                taken += 1;
+                // Where it came from is the SP ay_int saved.
+                let from =
+                    u16::from_le_bytes([spec.bus.peek_raw(saved), spec.bus.peek_raw(saved + 1)]);
+                if from >> 8 != 0xF0 {
+                    in_sprites += 1;
+                }
+            }
+        }
+        key(&mut spec, row, bit, false);
+    }
+    // Measured: 978. The rest come while a sprite's first row is read, before
+    // DE holds anything to put back, or while ay_append has them off.
+    assert!(taken >= 970, "{taken} interrupts in 1,000 frames");
+    assert!(
+        in_sprites > 50,
+        "only {in_sprites} were taken inside a sprite"
+    );
+}
+
+/// Passes made in 1,000 frames at `turbo`: walking about the first room from
+/// the start, and left alone in the busy room at frame 90,000.
+fn passes_in_1000_frames(snap: &str, map: &str, turbo: u32) -> (u16, u16) {
+    let count = |s: &Spectrum| u16::from_le_bytes([s.bus.peek_raw(0x5B02), s.bus.peek_raw(0x5B03)]);
+    let mut spec = machine(snap);
+    start_a_game(&mut spec);
+    spec.bus.turbo = turbo;
+    let t = spec.bus.model.frame_t();
+    let before = count(&spec);
+    for i in 0..20 {
+        let (row, bit) = WALK[i % WALK.len()];
+        key(&mut spec, row, bit, true);
+        for _ in 0..50 {
+            spec.run(t);
+        }
+        key(&mut spec, row, bit, false);
+    }
+    let room_1 = count(&spec).wrapping_sub(before);
+    let sna = std::fs::read("assemblies/out/busy90000.sna").unwrap();
+    let mut busy = busy_machine(&sna, snap, map);
+    busy.bus.turbo = turbo;
+    let before = count(&busy);
+    for _ in 0..1_000 {
+        busy.run(t);
+    }
+    (room_1, count(&busy).wrapping_sub(before))
+}
+
+// The game's only pacing was a busy-wait, so the emulator's CPU turbo made it
+// run away: at 4x the faster build goes round 785 times in 1,000 frames of the
+// first room. The paced build waits for the interrupt to hold every pass to
+// five frames, about the original's quickest, in any room. Before interrupts
+// were let in during sprites it held 179, not 200: the frames it counted
+// were short by the ones lost.
+#[test]
+fn the_paced_build_holds_five_frames_a_pass_at_turbo() {
+    if !have(&[
+        PACED,
+        PACED_MAP,
+        "assemblies/out/busy90000.sna",
+        "roms/128.rom",
+    ]) {
+        return;
+    }
+    let (room_1, busy) = passes_in_1000_frames(PACED, PACED_MAP, 4);
+    assert!(
+        (195..=200).contains(&room_1) && (195..=200).contains(&busy),
+        "at 4x, {room_1} passes in 1,000 frames of the first room and {busy} of a busy one; \
+         a pass every five frames is 200"
+    );
+}
+
+// Pacing only holds a pass back. A busy room takes ten frames a pass at the
+// machine's own speed, so there it must cost nothing.
+#[test]
+fn pacing_costs_a_busy_room_nothing_at_normal_speed() {
+    if !have(&[
+        PACED,
+        PACED_MAP,
+        FAST,
+        FAST_MAP,
+        "assemblies/out/busy90000.sna",
+        "roms/128.rom",
+    ]) {
+        return;
+    }
+    let (_, paced) = passes_in_1000_frames(PACED, PACED_MAP, 1);
+    let (_, fast) = passes_in_1000_frames(FAST, FAST_MAP, 1);
+    assert!(
+        paced + 2 >= fast,
+        "in 1,000 frames of a busy room, {paced} passes paced and {fast} not"
+    );
+}
+
+// Waiting changes when a pass happens, never what it does.
+#[test]
+fn the_paced_build_plays_the_same_game() {
+    if !have(&[PACED, PACED_MAP, FAST, FAST_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let paced = play_by_pass(PACED, PACED_MAP, 300);
+    let fast = play_by_pass(FAST, FAST_MAP, 300);
+    for (pass, (a, b)) in fast.iter().zip(&paced).enumerate() {
+        if let Some(at) = a.iter().zip(b).position(|(x, y)| x != y) {
+            panic!(
+                "pass {pass}: ${:04X} is ${:02X} in the faster build and ${:02X} paced",
+                0x4000 + at,
+                a[at],
+                b[at]
+            );
+        }
     }
 }
