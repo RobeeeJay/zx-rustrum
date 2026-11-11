@@ -340,3 +340,77 @@ fn a_real_program_assembles_back_into_the_same_bytes() {
         out.instructions, out.data_bytes
     );
 }
+
+// The rebuilt games are moving into the 128K's spare banks, which are only
+// ever seen at $C000-$FFFF, so the same address can hold two things and the
+// assembler has to keep them apart: a bank of its own in a file of its own,
+// and the bank written beside each of its labels in the map.
+#[test]
+fn the_python_assembler_puts_code_in_a_bank_of_its_own() {
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("no python3; skipping");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("zxrs-z80asm-bank-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let (src, bin, map) = (
+        dir.join("game.asm"),
+        dir.join("game.bin"),
+        dir.join("game.map"),
+    );
+    let assemble = |source: &str| {
+        std::fs::write(&src, source).unwrap();
+        std::process::Command::new("python3")
+            .arg("tools/z80asm.py")
+            .arg(&src)
+            .arg(&bin)
+            .arg("--map")
+            .arg(&map)
+            .arg("--mcp")
+            .arg(env!("CARGO_BIN_EXE_mcp"))
+            .output()
+            .expect("python3 runs")
+    };
+    let run = assemble(
+        "        ORG $8000\nstart:\n        JP far\n        BANK 3\n        ORG $C000\nfar:\n        \
+         LD B,$33\n        RET\n        BANK\n        ORG $C000\nnear:\n        LD C,$00\n",
+    );
+    assert!(
+        run.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let main = std::fs::read(&bin).unwrap();
+    let bank = std::fs::read(dir.join("game.bank3.bin")).unwrap();
+    assert_eq!(&main[..3], &[0xC3, 0x00, 0xC0], "JP far, to $C000");
+    assert_eq!(
+        main.len(),
+        0x4002,
+        "$8000 to the end of near, at $C000 in the main image"
+    );
+    assert_eq!(&main[0x4000..], &[0x0E, 0x00], "near is in the main image");
+    assert_eq!(bank.len(), 0x4000, "a whole bank");
+    assert_eq!(&bank[..3], &[0x06, 0x33, 0xC9], "far is in bank 3");
+    let map = std::fs::read_to_string(&map).unwrap();
+    assert!(
+        map.contains("far $C000 bank3\n") && map.contains("near $C000\n"),
+        "{map}"
+    );
+
+    let run = assemble("        BANK 4\n        ORG $8000\n        NOP\n");
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(
+        !run.status.success() && said.contains("only seen from $C000"),
+        "{said}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

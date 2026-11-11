@@ -34,7 +34,8 @@ fn address(map: &str, name: &str) -> u16 {
         .unwrap()
         .lines()
         .find_map(|l| l.strip_prefix(&format!("{name} $")))
-        .map(|a| u16::from_str_radix(a, 16).unwrap())
+        // "name $ADDR", or "name $ADDR bankN" for a label in a bank.
+        .map(|a| u16::from_str_radix(a.split_whitespace().next().unwrap(), 16).unwrap())
         .unwrap_or_else(|| panic!("{name} is not in {map}"))
 }
 
@@ -749,4 +750,52 @@ fn the_paced_build_plays_the_same_game() {
             );
         }
     }
+}
+
+// Step 1 of assemblies/memory-plan.md: the snapshot writer puts a bank the
+// assembler wrote into its page, and can leave the paging free, which the
+// game has to have once it pages anything. Locked, as before, unless asked.
+#[test]
+fn a_snapshot_carries_a_bank_and_can_leave_paging_unlocked() {
+    let needs = [
+        "assemblies/snapshot.py",
+        "assemblies/out/recording.z80",
+        "assemblies/out/original.map",
+    ];
+    if !have(&[&needs[..], &[FAST_MAP, "roms/128.rom"]].concat()) {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("zxrs-bank-snapshot-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let page: Vec<u8> = (0..0x4000u32).map(|i| (i * 7 % 251) as u8).collect();
+    let bank = dir.join("bank3.bin");
+    std::fs::write(&bank, &page).unwrap();
+    let write = |name: &str, extra: &[&str]| {
+        let out = dir.join(name);
+        let run = std::process::Command::new("python3")
+            .arg(needs[0])
+            .args([
+                needs[1],
+                needs[2],
+                "assemblies/out/fast fixed.bin",
+                FAST_MAP,
+            ])
+            .arg(&out)
+            .args(["--start", "--ay", "0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0"])
+            .args(extra)
+            .output()
+            .unwrap();
+        assert!(
+            run.status.success(),
+            "{}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        machine(out.to_str().unwrap())
+    };
+    let bank_arg = format!("3={}", bank.display());
+    let free = write("free.szx", &["--unlocked", "--bank", &bank_arg]);
+    let locked = write("locked.szx", &[]);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(&free.bus.ram[3 * 0x4000..4 * 0x4000], &page[..], "bank 3");
+    assert!(!free.bus.paging_locked && locked.bus.paging_locked);
 }
