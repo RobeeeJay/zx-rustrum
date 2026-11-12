@@ -44,6 +44,71 @@ fn labels() -> Vec<(u16, String)> {
     out
 }
 
+/// Plays the original from its recording for FRAMES frames with `tracker`
+/// counting, calling `at` whenever it reaches one of `breakpoints`. A recording that has parted from the machine
+/// reads input that was never recorded, and what it measured would be some
+/// other game, so that is refused.
+fn replay(
+    breakpoints: &[u16],
+    tracker: Tracker,
+    mut at: impl FnMut(&mut Spectrum, u16),
+) -> Spectrum {
+    let recording = zx_rustrum::rzx::parse(&std::fs::read(RECORDING).unwrap()).unwrap();
+    let snap = recording.snapshot.clone().unwrap();
+    let mut spec = Spectrum::with_model(Model::Spectrum48);
+    spec.load_rom(&std::fs::read("roms/48.rom").unwrap());
+    zx_rustrum::snapshot::load_bytes(&mut spec, &snap.extension, &snap.data).unwrap();
+    spec.bus.playback = Some(Playback::default());
+    spec.breakpoints = breakpoints.to_vec();
+    spec.bus.tracker = tracker;
+    let mut carry = 0;
+    for frame in 0..FRAMES.min(recording.len()) {
+        if let Some(snapshot) = recording.snapshot_before(frame) {
+            zx_rustrum::rzx::carry_on_from(&mut spec, snapshot).unwrap();
+        }
+        let f = &recording.frames[frame];
+        let (asked, left) = zx_rustrum::rzx::owed(f.fetches.max(1) as u32, carry);
+        let mut ask = asked;
+        if let Some(playback) = &mut spec.bus.playback {
+            playback.start_frame(f.inputs.clone());
+        }
+        let mut done_all = 0;
+        while ask > 0 {
+            let (stop, done) = spec.run_fetches(ask);
+            done_all += done;
+            ask = ask.saturating_sub(done);
+            match stop {
+                Stop::Breakpoint(pc) => {
+                    at(&mut spec, pc);
+                    // Off the breakpoint, or it stops here for ever.
+                    let (_, done) = {
+                        let keep = std::mem::take(&mut spec.breakpoints);
+                        let r = spec.run_fetches(1);
+                        spec.breakpoints = keep;
+                        r
+                    };
+                    done_all += done;
+                    ask = ask.saturating_sub(done);
+                }
+                Stop::Budget => {}
+                other => panic!("frame {frame}: stopped by {other:?}"),
+            }
+        }
+        // An instruction run past the frame counts against the next, as the
+        // recording counted it.
+        carry = left + done_all.saturating_sub(asked);
+        spec.bus.end_frame_here();
+        spec.bus.raise_interrupt();
+    }
+    let playback = spec.bus.playback.as_ref().unwrap();
+    assert_eq!(
+        (playback.short, playback.unread),
+        (0, 0),
+        "the recording came adrift: short reads and unread input"
+    );
+    spec
+}
+
 #[test]
 #[ignore]
 fn what_each_phase_of_a_pass_uses() {
@@ -74,73 +139,23 @@ fn what_each_phase_of_a_pass_uses() {
         (at("game_over"), 2),
     ];
 
-    let recording = zx_rustrum::rzx::parse(&std::fs::read(RECORDING).unwrap()).unwrap();
-    let snap = recording.snapshot.clone().unwrap();
-    let mut spec = Spectrum::with_model(Model::Spectrum48);
-    spec.load_rom(&std::fs::read("roms/48.rom").unwrap());
-    zx_rustrum::snapshot::load_bytes(&mut spec, &snap.extension, &snap.data).unwrap();
-    spec.bus.playback = Some(Playback::default());
-    spec.breakpoints = starts.iter().map(|(a, _)| *a).collect();
-
     let mut trackers: Vec<Tracker> = (0..3).map(|_| Tracker::new()).collect();
     // The recording starts in the menu's tune.
     let mut phase = 2;
-    std::mem::swap(&mut spec.bus.tracker, &mut trackers[phase]);
-    let mut carry = 0;
     let mut switches = [0u64; 3];
-    for frame in 0..FRAMES.min(recording.len()) {
-        if let Some(snapshot) = recording.snapshot_before(frame) {
-            zx_rustrum::rzx::carry_on_from(&mut spec, snapshot).unwrap();
+    let breakpoints: Vec<u16> = starts.iter().map(|(a, _)| *a).collect();
+    let first = std::mem::replace(&mut trackers[2], Tracker::new());
+    let spec = replay(&breakpoints, first, |spec, pc| {
+        let next = starts.iter().find(|(a, _)| *a == pc).unwrap().1;
+        if next != phase {
+            std::mem::swap(&mut spec.bus.tracker, &mut trackers[phase]);
+            phase = next;
+            std::mem::swap(&mut spec.bus.tracker, &mut trackers[phase]);
+            switches[phase] += 1;
         }
-        let f = &recording.frames[frame];
-        let (asked, left) = zx_rustrum::rzx::owed(f.fetches.max(1) as u32, carry);
-        let mut ask = asked;
-        if let Some(playback) = &mut spec.bus.playback {
-            playback.start_frame(f.inputs.clone());
-        }
-        let mut done_all = 0;
-        while ask > 0 {
-            let (stop, done) = spec.run_fetches(ask);
-            done_all += done;
-            ask = ask.saturating_sub(done);
-            match stop {
-                Stop::Breakpoint(pc) => {
-                    let next = starts.iter().find(|(a, _)| *a == pc).unwrap().1;
-                    if next != phase {
-                        std::mem::swap(&mut spec.bus.tracker, &mut trackers[phase]);
-                        phase = next;
-                        std::mem::swap(&mut spec.bus.tracker, &mut trackers[phase]);
-                        switches[phase] += 1;
-                    }
-                    // Off the breakpoint, or it stops here for ever.
-                    let (_, done) = {
-                        let keep = std::mem::take(&mut spec.breakpoints);
-                        let r = spec.run_fetches(1);
-                        spec.breakpoints = keep;
-                        r
-                    };
-                    done_all += done;
-                    ask = ask.saturating_sub(done);
-                }
-                Stop::Budget => {}
-                other => panic!("frame {frame}: stopped by {other:?}"),
-            }
-        }
-        // An instruction run past the frame counts against the next, as the
-        // recording counted it.
-        carry = left + done_all.saturating_sub(asked);
-        spec.bus.end_frame_here();
-        spec.bus.raise_interrupt();
-    }
+    });
+    let mut spec = spec;
     std::mem::swap(&mut spec.bus.tracker, &mut trackers[phase]);
-    // A recording that has parted from the machine reads input that was
-    // never recorded, and what it measured would be some other game.
-    let playback = spec.bus.playback.as_ref().unwrap();
-    assert_eq!(
-        (playback.short, playback.unread),
-        (0, 0),
-        "the recording came adrift: short reads and unread input"
-    );
 
     // Per address from $5B00: which phases executed, read and wrote it.
     let flags = |addr: u16| -> [u8; 3] {
@@ -307,4 +322,65 @@ fn what_each_phase_of_a_pass_uses() {
     }
     std::fs::write(ROUTINES, routines).unwrap();
     eprintln!("{}", &report[..report.len().min(400)]);
+}
+
+// Step 12 of assemblies/memory-plan.md keeps sprites already shifted in the
+// spare banks, and there is room for only some: which ones is decided by how
+// often the original drew each sprite at each shift, facing each way, over
+// its recording. Facing is whether the stored copy has been mirrored since
+// the recording began (bit 6 of its first byte), which is which of the
+// banked build's two copies it would be drawn from. Writes
+// assemblies/out/shift-usage.txt: label, offset from it, facing (0 as
+// stored, 1 mirrored), shift, draws, bytes drawn.
+#[test]
+#[ignore]
+fn how_often_each_sprite_is_drawn_at_each_shift() {
+    if [RECORDING, MAP, "roms/48.rom"]
+        .iter()
+        .any(|f| std::fs::metadata(f).is_err())
+    {
+        eprintln!("no recording, map or ROM; skipping");
+        return;
+    }
+    let labels = labels();
+    let at = |name: &str| labels.iter().find(|(_, n)| n == name).unwrap().0;
+    let sprites: Vec<(u16, String)> = labels
+        .iter()
+        .filter(|(_, n)| n.starts_with("sprite_") && n != "sprite_table" && n.len() == 9)
+        .cloned()
+        .collect();
+    let clipped = at("sprite_clipped");
+    // Each sprite's first byte as it was when the recording began, which is
+    // how the banked build stores it in bank 0.
+    let stored = std::fs::read("assemblies/out/original.bin").unwrap();
+    let mut counts = std::collections::BTreeMap::<(String, u16, u8, u8), (u64, u64)>::new();
+    replay(&[clipped], Tracker::new(), |spec, _| {
+        let ix = spec.cpu.ix;
+        let shift = spec.bus.peek_raw(ix.wrapping_add(0x1A)) & 7;
+        if shift == 0 {
+            return;
+        }
+        let sprite = spec.cpu.de().wrapping_sub(2);
+        let facing = (spec.bus.peek_raw(sprite) ^ stored[usize::from(sprite - 0x5B00)]) >> 6 & 1;
+        let (base, name) = sprites.iter().rev().find(|(a, _)| *a <= sprite).unwrap();
+        let bytes = u64::from(spec.bus.peek_raw(ix.wrapping_add(0x18)))
+            * u64::from(spec.bus.peek_raw(ix.wrapping_add(0x19)));
+        let e = counts
+            .entry((name.clone(), sprite - base, facing, shift))
+            .or_insert((0, 0));
+        e.0 += 1;
+        e.1 += bytes;
+    });
+    let mut out = String::from("label offset facing shift draws bytes\n");
+    for ((name, offset, facing, shift), (draws, bytes)) in &counts {
+        out.push_str(&format!(
+            "{name} {offset} {facing} {shift} {draws} {bytes}\n"
+        ));
+    }
+    std::fs::write("assemblies/out/shift-usage.txt", out).unwrap();
+    assert!(
+        counts.len() > 50,
+        "only {} sprite, facing and shift seen",
+        counts.len()
+    );
 }

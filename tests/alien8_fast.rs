@@ -1602,3 +1602,106 @@ fn the_drawing_order_is_the_same_as_beginning_again() {
         "{passed} of 3,000 trials took the passing path"
     );
 }
+
+// Step 12 of the memory plan keeps copies of sprites already shifted, made
+// when the game is built, and draws them by the aligned path instead of
+// shifting as it goes. Every object type is drawn here at every shift,
+// facing both ways, over two backgrounds, by the faster build (which
+// shifts) and the banked one (which uses a copy where there is one), and
+// the buffers have to match. Always the way up the sprite is stored: the
+// game never turns one upside down (nothing sets bit 7 of an object's
+// flags, and that code never ran in the recording), and forced to, even
+// the free-running build never comes back from it.
+#[test]
+fn a_pre_shifted_copy_draws_what_shifting_would() {
+    if !have(&[FAST, FAST_MAP, BANKED, BANKED_MAP, "roms/128.rom"]) {
+        return;
+    }
+    // From a game in play: draw_sprite lets interrupts in while the stack
+    // pointer is reading the sprite, which only the game's own handler copes
+    // with, and the snapshot is from before game_start sets it and the sound
+    // driver up. Straight from the snapshot, in IM 1, the ROM's handler
+    // pushed onto the sprite and the copies came apart; in IM 2 with the
+    // driver not started, the faster build ran off into its data.
+    let mut builds = [
+        (at_first_pass(FAST, FAST_MAP), FAST_MAP),
+        (at_first_pass(BANKED, BANKED_MAP), BANKED_MAP),
+    ];
+    let buffers: Vec<u16> = builds.iter().map(|(_, m)| address(m, "buffer")).collect();
+    let preshift = address(BANKED_MAP, "preshift_page");
+    let (mut drawn, mut copies) = (0u32, 0u32);
+    for kind in 2..0x84u8 {
+        for shift in 1..8u8 {
+            // Over a pattern, and over all ones, where a picture bit outside
+            // its mask comes out differently XORed (shifting) and ORed (a copy).
+            for (facing, ones) in [(0x00u8, false), (0x40, false), (0x00, true), (0x40, true)] {
+                let mut after = Vec::new();
+                for (i, (spec, map)) in builds.iter_mut().enumerate() {
+                    for j in 0..0x1800u16 {
+                        let byte = if ones {
+                            0xFF
+                        } else {
+                            (j.wrapping_mul(29) >> 2) as u8 ^ (j as u8)
+                        };
+                        spec.bus.poke(buffers[i] + j, byte);
+                    }
+                    let ix = 0x5B88 + 32 * 11;
+                    let table = address(map, "sprite_table") + 2 * u16::from(kind);
+                    let sprite = u16::from_le_bytes([
+                        spec.bus.peek_raw(table),
+                        spec.bus.peek_raw(table + 1),
+                    ]);
+                    // Bank 0 holds the sprite as stored in the banked build.
+                    let up = if i == 0 {
+                        spec.bus.peek_raw(sprite)
+                    } else {
+                        spec.bus.bank_byte(0, sprite)
+                    } & 0x80;
+                    let flags = up | facing;
+                    spec.bus.poke(ix, kind);
+                    spec.bus.poke(ix + 7, flags);
+                    spec.bus.poke(ix + 0x1A, 0x40 + shift);
+                    spec.bus.poke(ix + 0x1B, 0x30);
+                    spec.cpu.ix = ix;
+                    let draw = address(map, "draw_sprite");
+                    if i == 1 {
+                        // Through the copy, if there is one: counted at preshift_page.
+                        let mut probe = spec.clone();
+                        probe.cpu.ix = ix;
+                        let top = probe.cpu.sp.wrapping_sub(64);
+                        probe.cpu.sp = top;
+                        probe.bus.poke(top, 0);
+                        probe.bus.poke(top + 1, 0);
+                        probe.cpu.pc = draw;
+                        while !(probe.cpu.pc == 0 && probe.cpu.sp == top + 2) {
+                            if probe.cpu.pc == preshift {
+                                copies += 1;
+                            }
+                            probe.step_instruction();
+                        }
+                    }
+                    call(spec, draw, 0, 0, 0);
+                    after.push(
+                        (0..0x1800u16)
+                            .map(|j| spec.bus.peek_raw(buffers[i] + j))
+                            .collect::<Vec<u8>>(),
+                    );
+                }
+                drawn += 1;
+                if let Some(j) = after[0].iter().zip(&after[1]).position(|(a, b)| a != b) {
+                    panic!(
+                        "type ${kind:02X} at shift {shift} facing ${facing:02X}: buffer byte {j} is ${:02X} \
+                         shifted and ${:02X} from the banked build",
+                        after[0][j], after[1][j]
+                    );
+                }
+            }
+        }
+    }
+    eprintln!("{drawn} draws compared, {copies} from a pre-shifted copy");
+    // 474 directory entries, each met twice here.
+    assert!(
+        copies > 800,
+        "only {copies} of {drawn} draws used a pre-shifted copy"
+    );
+}
