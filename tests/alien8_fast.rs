@@ -57,7 +57,11 @@ fn key(spec: &mut Spectrum, row: usize, bit: u8, down: bool) {
 }
 
 /// From game_start through the menu, with 0 held long enough to be seen
-/// between two notes of its tune.
+/// between two notes of its tune, and into the game: until frame 1,000, or
+/// pass 64, well short of FIRST_PASS. A thousand frames used to be the only
+/// limit, and with Step 16 the banked build was at pass 132 by then, past the
+/// pass both builds are compared from, so they were compared four passes
+/// apart.
 fn start_a_game(spec: &mut Spectrum) {
     let t = spec.bus.model.frame_t();
     for f in 0..1_000 {
@@ -67,6 +71,11 @@ fn start_a_game(spec: &mut Spectrum) {
             _ => {}
         }
         spec.run(t);
+        if u16::from_le_bytes([spec.bus.peek_raw(0x5B02), spec.bus.peek_raw(0x5B03)])
+            >= FIRST_PASS / 2
+        {
+            return;
+        }
     }
 }
 
@@ -1133,7 +1142,14 @@ fn every_room_is_built_the_same_from_bank_3() {
         return;
     }
     let fast = at_first_pass(FAST, FAST_MAP);
-    let banked = at_first_pass(BANKED, BANKED_MAP);
+    let mut banked = at_first_pass(BANKED, BANKED_MAP);
+    // Since Step 16 the buffer differs outside what was last cleared, which
+    // never reaches the screen; building a room clears it all, so the
+    // builds start from the same one.
+    let (from, to) = (address(FAST_MAP, "buffer"), address(BANKED_MAP, "buffer"));
+    for i in 0..0x1800 {
+        banked.bus.poke(to + i, fast.bus.peek_raw(from + i));
+    }
     assert_eq!(
         first_difference(
             &[after_building(&fast, FAST_MAP)],
