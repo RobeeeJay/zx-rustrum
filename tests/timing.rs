@@ -329,3 +329,37 @@ fn the_floating_bus_reads_what_the_ula_is_fetching() {
         "in the border above the picture there is nothing on the bus"
     );
 }
+
+// What decides whether moving something out of contended memory is worth it
+// is how long the CPU waits on it, so the bus can count the waiting by the
+// page it was waiting to use. A fetch from $4000 at T-state 14335 waits six
+// (the reference's pattern) and one from $8000 not at all; both must be
+// counted as such, and nothing counted while nobody asked.
+#[test]
+fn stalls_are_counted_by_the_page_waited_on() {
+    let mut spec = Spectrum::new();
+    spec.bus.tstates = 14335;
+    spec.bus.fetch_op(0x4000);
+    assert!(spec.bus.stalls.is_none(), "counting started unasked");
+
+    let mut spec = Spectrum::new();
+    spec.bus.stalls = Some(Box::new([0; 256]));
+    spec.bus.tstates = 14335;
+    spec.bus.fetch_op(0x4000);
+    spec.bus.tstates = 14335;
+    spec.bus.fetch_op(0x8000);
+    // An internal cycle with a contended address on the bus waits too.
+    spec.bus.tstates = 14335;
+    spec.bus.contend(0x4100, 1);
+    let stalls = spec.bus.stalls.as_ref().unwrap();
+    assert_eq!(
+        (
+            stalls[0x40],
+            stalls[0x41],
+            stalls[0x80],
+            stalls.iter().sum::<u64>()
+        ),
+        (6, 6, 0, 12),
+        "stalls on page $40, $41 and $80, and in all"
+    );
+}

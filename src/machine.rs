@@ -328,6 +328,12 @@ pub struct SpectrumBus {
     /// is every case but Race the Beam: marking every write costs a branch and
     /// a couple of stores on the busiest path there is.
     pub tints: Option<Tints>,
+    /// T-states the ULA has held the CPU up for, by the high byte of the
+    /// address it was waiting to use, while anybody is counting. It is what
+    /// says whether moving something out of contended memory is worth doing;
+    /// `None` costs nothing, since the count is only made where a stall
+    /// already is.
+    pub stalls: Option<Box<[u64; 256]>>,
     /// What each routine is seen to do, while it is switched on.
     pub observer: crate::observe::Observer,
     /// What the debugger is watching for, and what it caught. The bus is
@@ -375,6 +381,7 @@ impl SpectrumBus {
             snow_r: Vec::new(),
             snow_marks: 0,
             tints: None,
+            stalls: None,
             undo: None,
             capture: None,
             tstates: 0,
@@ -928,7 +935,11 @@ impl SpectrumBus {
     #[inline]
     fn access(&mut self, addr: u16, t: u32) {
         if self.contended_addr(addr) {
-            self.tstates += self.delay() as u32;
+            let stall = self.delay() as u32;
+            self.tstates += stall;
+            if let Some(stalls) = &mut self.stalls {
+                stalls[usize::from(addr >> 8)] += u64::from(stall);
+            }
         }
         self.cpu_cycles(t);
     }
@@ -941,7 +952,11 @@ impl SpectrumBus {
             for _ in 0..times {
                 // The stall is the ULA's and the cycle is the CPU's, so they
                 // are charged to their own clocks rather than added together.
-                self.tstates += self.delay() as u32;
+                let stall = self.delay() as u32;
+                self.tstates += stall;
+                if let Some(stalls) = &mut self.stalls {
+                    stalls[usize::from(addr >> 8)] += u64::from(stall);
+                }
                 self.cpu_cycles(1);
             }
         } else {
