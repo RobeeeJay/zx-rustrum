@@ -566,6 +566,54 @@ fn busy_machine(sna: &[u8], snap: &str, map: &str) -> Spectrum {
 
 const BUSY: [u32; 3] = [45_000, 50_000, 90_000];
 
+/// The room the played build slowed down in, saved from the emulator, and
+/// the same state at end_of_pass in the original's layout, as busy_machine
+/// takes it (written by keep_the_room_the_game_slowed_down_in).
+const SAVED: &str = "assemblies/Alien-8-saved-slowdown.szx";
+const SLOWED: &str = "assemblies/out/slowed.sna";
+const PLAYED_MAP: &str = "assemblies/out/Alien 8 AY banked.map";
+
+// A room saved from the emulator, where the played build was seen to slow
+// down, is carried into the test builds the way the busy rooms from the
+// recording are: as the original's memory at end_of_pass. Run by
+// assemblies/fast.sh. It was saved from the Step 13 build, whose main loop
+// is where the current build's is, which is checked rather than assumed.
+#[test]
+#[ignore]
+fn keep_the_room_the_game_slowed_down_in() {
+    if !have(&[SAVED, PLAYED_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let mut spec = machine(SAVED);
+    let end_of_pass = address(PLAYED_MAP, "end_of_pass");
+    let played = machine("assemblies/Alien 8 AY banked start.szx");
+    // Up to the first CALL, whose target may have moved since.
+    let code: Vec<(u8, u8)> = (end_of_pass..end_of_pass + 21)
+        .map(|a| (spec.bus.peek_raw(a), played.bus.peek_raw(a)))
+        .collect();
+    assert!(
+        code.iter().all(|(a, b)| a == b),
+        "the saved game's end_of_pass is not the played build's: {code:02X?}"
+    );
+    run_to(&mut spec, end_of_pass, 50_000_000, "end_of_pass");
+    let mut sna = vec![0u8; 27 + 0xC000];
+    for a in 0x4000..0x6288u16 {
+        sna[27 + usize::from(a) - 0x4000] = spec.bus.peek_raw(a);
+    }
+    let buffer = address(PLAYED_MAP, "buffer");
+    for i in 0..0x1800u16 {
+        sna[27 + 0xD200 - 0x4000 + usize::from(i)] = spec.bus.peek_raw(buffer + i);
+    }
+    // The room pointers back to the original's room data at $6460, which
+    // busy_machine moves on to wherever a build keeps it.
+    let moved = room_base(PLAYED_MAP).wrapping_sub(0x6460);
+    let at = 27 + 0x1B34;
+    let entry = u16::from_le_bytes([sna[at], sna[at + 1]]).wrapping_sub(moved);
+    sna[at..at + 2].copy_from_slice(&entry.to_le_bytes());
+    sna[27 + 0x1B20] = sna[27 + 0x1B20].wrapping_sub(moved as u8);
+    std::fs::write(SLOWED, sna).unwrap();
+}
+
 // The first room has few objects in it, and walking about never leaves it,
 // so three busy rooms are taken from the original's recording too
 // (assemblies/busy_states.py), each at end_of_pass. Only the game's state is
@@ -992,6 +1040,27 @@ fn the_banked_build_plays_the_same_game_pass_for_pass() {
             panic!("from frame {frame} of the recording, {what}");
         }
     }
+    // The room the played build slowed down in, saved from the emulator: 37
+    // objects, 23 drawn a pass, and the most pairs put in order of any.
+    if have(&[SLOWED]) {
+        let sna = std::fs::read(SLOWED).unwrap();
+        let fast = play_on(busy_machine(&sna, FAST, FAST_MAP), FAST_MAP, 300, 0, false);
+        let banked = play_on(
+            busy_machine(&sna, BANKED, BANKED_MAP),
+            BANKED_MAP,
+            300,
+            0,
+            false,
+        );
+        assert_eq!(
+            (fast.len(), banked.len()),
+            (300, 300),
+            "in the saved room, the game stopped"
+        );
+        if let Some(what) = first_difference(&fast, &banked) {
+            panic!("in the saved room, {what}");
+        }
+    }
 }
 
 /// A machine in a game, stopped at the end of pass FIRST_PASS.
@@ -1128,6 +1197,7 @@ fn building_a_room_loses_no_interrupts() {
     let ticks =
         |s: &Spectrum| u16::from_le_bytes([s.bus.peek_raw(ticks_at), s.bus.peek_raw(ticks_at + 1)]);
     let (mut frames, mut counted) = (0u64, 0u16);
+    let frame_t = u64::from(start.bus.model.frame_t());
     for room in 0..=255u8 {
         let mut spec = start.clone();
         spec.bus.poke(0x5B90, room);
@@ -1140,7 +1210,7 @@ fn building_a_room_loses_no_interrupts() {
         spec.cpu.pc = build_room;
         spec.cpu.iff1 = true;
         spec.cpu.iff2 = true;
-        let (frame, tick) = (spec.bus.frame, ticks(&spec));
+        let (t, tick) = (spec.bus.total_t(), ticks(&spec));
         let mut returned = false;
         for _ in 0..1_000_000 {
             spec.step_instruction();
@@ -1150,7 +1220,13 @@ fn building_a_room_loses_no_interrupts() {
             }
         }
         assert!(returned, "building room {room} did not return");
-        frames += spec.bus.frame - frame;
+        // A frame's interrupt is held for its first 32 T-states, so a frame
+        // counts once that has gone by inside the build. Counting frames
+        // begun instead lost one in Step 14's layout, where room 55 returns
+        // at T-state 0 of a frame and the interrupt is taken by the next
+        // instruction, after the build.
+        let held = |at: u64| (at - 32) / frame_t;
+        frames += held(spec.bus.total_t()) - held(t);
         counted = counted.wrapping_add(ticks(&spec).wrapping_sub(tick));
     }
     assert!(
