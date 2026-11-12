@@ -161,9 +161,16 @@ fn the_faster_build_plays_the_same_game_pass_for_pass() {
 /// returns to a sentinel address pushed for it.
 fn call(spec: &mut Spectrum, at: u16, bc: u16, de: u16, hl: u16) {
     let sentinel = 0x0000;
-    spec.cpu.sp = 0xF0F0;
-    spec.bus.poke(0xF0F0, (sentinel & 0xFF) as u8);
-    spec.bus.poke(0xF0F1, (sentinel >> 8) as u8);
+    // Below wherever the machine keeps its stack: bank 0's $F0xx until Step
+    // 4 of the memory plan, fixed memory after, where a trampoline that pages
+    // can push in one bank and pop in another.
+    // SP is put back afterwards, or a test making thousands of calls walks
+    // the stack down into the buffer.
+    let was = spec.cpu.sp;
+    let top = was.wrapping_sub(64);
+    spec.cpu.sp = top;
+    spec.bus.poke(top, (sentinel & 0xFF) as u8);
+    spec.bus.poke(top + 1, (sentinel >> 8) as u8);
     spec.cpu.pc = at;
     spec.cpu.iff1 = false;
     spec.cpu.iff2 = false;
@@ -175,7 +182,8 @@ fn call(spec: &mut Spectrum, at: u16, bc: u16, de: u16, hl: u16) {
     spec.cpu.l = hl as u8;
     for _ in 0..1_000_000 {
         spec.step_instruction();
-        if spec.cpu.pc == sentinel && spec.cpu.sp == 0xF0F2 {
+        if spec.cpu.pc == sentinel && spec.cpu.sp == top + 2 {
+            spec.cpu.sp = was;
             return;
         }
     }
@@ -512,7 +520,7 @@ fn busy_machine(sna: &[u8], snap: &str, map: &str) -> Spectrum {
     spec.bus.poke(0x5B20, kinds);
     spec.bus.set_joystick(zx_rustrum::joystick::Kind::Kempston);
     spec.cpu.pc = address(map, "end_of_pass");
-    spec.cpu.sp = 0xF100;
+    spec.cpu.sp = stack_top(map);
     // The IM 2 table is wherever the build keeps it: $EC00 until Step 3 of
     // the memory plan moved it.
     spec.cpu.i = (address(map, "ay_vectors") >> 8) as u8;
@@ -837,7 +845,26 @@ fn comparable(spec: &Spectrum, map: &str) -> Vec<u8> {
     // means nothing.
     state[0x1B2F..0x1B31].fill(0);
     room_pointers_as_offsets(&mut state, map);
+    // $5B09 is where draw_sprite keeps SP while it reads the sprite with POP,
+    // and nothing else reads it. Step 4 moved the stack, and a sprite drawn
+    // from bank 3 is drawn through a trampoline, four bytes deeper, so what
+    // it holds afterwards says nothing about the game.
+    state[0x1B09..0x1B0B].fill(0);
     state
+}
+
+/// Where the stack starts: reverse_table's page in bank 0, until Step 4 of
+/// the memory plan moved it into fixed memory.
+fn stack_top(map: &str) -> u16 {
+    let moved = std::fs::read_to_string(map)
+        .unwrap()
+        .lines()
+        .any(|l| l.starts_with("stack_top $"));
+    if moved {
+        address(map, "stack_top")
+    } else {
+        0xF100
+    }
 }
 
 /// Where the room data starts: $6460, or bank 3 once Step 2 has moved it.
@@ -1071,9 +1098,10 @@ fn building_a_room_loses_no_interrupts() {
         spec.bus.poke(0x5B90, room);
         spec.cpu.ix = 0x5B88;
         let sentinel = 0x0000;
-        spec.cpu.sp = 0xF0F0;
-        spec.bus.poke(0xF0F0, 0);
-        spec.bus.poke(0xF0F1, 0);
+        let top = spec.cpu.sp.wrapping_sub(64);
+        spec.cpu.sp = top;
+        spec.bus.poke(top, 0);
+        spec.bus.poke(top + 1, 0);
         spec.cpu.pc = build_room;
         spec.cpu.iff1 = true;
         spec.cpu.iff2 = true;
@@ -1081,7 +1109,7 @@ fn building_a_room_loses_no_interrupts() {
         let mut returned = false;
         for _ in 0..1_000_000 {
             spec.step_instruction();
-            if spec.cpu.pc == sentinel && spec.cpu.sp == 0xF0F2 {
+            if spec.cpu.pc == sentinel && spec.cpu.sp == top + 2 {
                 returned = true;
                 break;
             }
@@ -1098,5 +1126,88 @@ fn building_a_room_loses_no_interrupts() {
         u64::from(counted),
         frames,
         "interrupts the driver counted, against frames that began, building 256 rooms"
+    );
+}
+
+/// Runs `spec` until it fetches from `at`, or panics after `limit` instructions.
+fn run_to(spec: &mut Spectrum, at: u16, limit: u64, what: &str) {
+    for _ in 0..limit {
+        if spec.cpu.pc == at {
+            return;
+        }
+        spec.step_instruction();
+    }
+    panic!("never reached {what} (${at:04X})");
+}
+
+// Step 4 moves the end of a game into bank 3: the report, the count of rooms
+// visited and the rating, the tune, and the screen that follows it, which
+// leaves by jumping into main_loop for good. Nothing else plays a game to its
+// end, so both builds are sent to game_over from the same game and compared
+// with the report up and waiting for a key, as the main loop is entered
+// again, and for the passes after.
+#[test]
+fn a_game_ends_the_same_from_bank_3() {
+    if !have(&[FAST, FAST_MAP, BANKED, BANKED_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let mut ends = Vec::new();
+    for (snap, map) in [(FAST, FAST_MAP), (BANKED, BANKED_MAP)] {
+        let mut spec = at_first_pass(snap, map);
+        spec.cpu.pc = address(map, "game_over");
+        // read_keys is first called once the report is on the screen.
+        run_to(
+            &mut spec,
+            address(map, "read_keys"),
+            50_000_000,
+            "the report",
+        );
+        let report = comparable(&spec, map);
+        // No key is pressed: the wait after the report gives up on its own.
+        // A key pressed on a given frame would land somewhere different in
+        // each build, which run at different speeds, and what it interrupts
+        // changes the screen after: the faster build against itself, with
+        // the key twenty frames later, differs in 111 bytes.
+        run_to(
+            &mut spec,
+            address(map, "main_loop"),
+            200_000_000,
+            "main_loop",
+        );
+        let after = comparable(&spec, map);
+        let passes = play_on(spec, map, 60, 0, false);
+        ends.push((report, after, passes));
+    }
+    let (fast, banked) = (&ends[0], &ends[1]);
+    let attributes = &fast.0[0x1800..0x1B00];
+    assert!(
+        attributes.iter().any(|a| *a != attributes[0]),
+        "nothing was drawn for the report"
+    );
+    assert_eq!(
+        first_difference(
+            std::slice::from_ref(&fast.0),
+            std::slice::from_ref(&banked.0)
+        ),
+        None,
+        "the report"
+    );
+    assert_eq!(
+        first_difference(
+            std::slice::from_ref(&fast.1),
+            std::slice::from_ref(&banked.1)
+        ),
+        None,
+        "back in main_loop"
+    );
+    assert_eq!(
+        (fast.2.len(), banked.2.len()),
+        (60, 60),
+        "passes after the end of the game"
+    );
+    assert_eq!(
+        first_difference(&fast.2, &banked.2),
+        None,
+        "the passes after"
     );
 }

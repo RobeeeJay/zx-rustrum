@@ -13,7 +13,8 @@
 //! cargo test --release --test alien8_usage -- --ignored --nocapture
 //! ```
 //!
-//! and writes what it found to assemblies/out/usage.txt.
+//! and writes what it found to assemblies/out/usage.txt, and what ran in
+//! each phase label by label to assemblies/out/usage-routines.txt.
 
 use zx_rustrum::machine::{Model, Playback, Spectrum, Stop};
 use zx_rustrum::tracker::Tracker;
@@ -21,6 +22,7 @@ use zx_rustrum::tracker::Tracker;
 const RECORDING: &str = "recordings/Alien8.rzx";
 const MAP: &str = "assemblies/out/original.map";
 const OUT: &str = "assemblies/out/usage.txt";
+const ROUTINES: &str = "assemblies/out/usage-routines.txt";
 const FRAMES: usize = 131_000;
 
 /// Objects moving, a frame being drawn, and anything else.
@@ -285,5 +287,24 @@ fn what_each_phase_of_a_pass_uses() {
         }
     }
     std::fs::write(OUT, &report).unwrap();
+
+    // Step 4: each label in the code, to the next, with what ran there in
+    // each phase, so that what runs only outside a pass can be moved out.
+    let mut routines = String::from("label start bytes logic draw other (x if any byte ran)\n");
+    for (i, (at, name)) in labels.iter().enumerate() {
+        if *at < 0xA5B2 || *at >= 0xD200 {
+            continue;
+        }
+        let end = labels.get(i + 1).map_or(0xD200, |l| l.0.min(0xD200));
+        let ran = |p: usize| (*at..end).any(|a| flags(a)[p] & 4 != 0);
+        routines.push_str(&format!(
+            "{name} ${at:04X} {} {} {} {}\n",
+            end - at,
+            if ran(0) { "x" } else { "-" },
+            if ran(1) { "x" } else { "-" },
+            if ran(2) { "x" } else { "-" }
+        ));
+    }
+    std::fs::write(ROUTINES, routines).unwrap();
     eprintln!("{}", &report[..report.len().min(400)]);
 }
