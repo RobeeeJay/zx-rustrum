@@ -513,7 +513,9 @@ fn busy_machine(sna: &[u8], snap: &str, map: &str) -> Spectrum {
     spec.bus.set_joystick(zx_rustrum::joystick::Kind::Kempston);
     spec.cpu.pc = address(map, "end_of_pass");
     spec.cpu.sp = 0xF100;
-    spec.cpu.i = 0xEC;
+    // The IM 2 table is wherever the build keeps it: $EC00 until Step 3 of
+    // the memory plan moved it.
+    spec.cpu.i = (address(map, "ay_vectors") >> 8) as u8;
     spec.cpu.im = 2;
     spec.cpu.iff1 = true;
     spec.cpu.iff2 = true;
@@ -1043,5 +1045,58 @@ fn fitting_a_room_marks_its_entry_in_bank_3() {
         ),
         (before | 7, 7, fixed),
         "the entry in bank 3, the room's kind of chamber, and bank 0 at the same address"
+    );
+}
+
+// Step 3 of assemblies/memory-plan.md moves the AY driver, the IM 2 table
+// and the handler out of bank 0, so an interrupt can be taken with bank 3
+// in, and the stubs into bank 3 leave interrupts on. Under Step 2 alone they
+// turned them off, and the interrupt that came while a room was built was
+// lost, a tick of the sound with it. Every room is built here with
+// interrupts on, and every frame that starts while it is being built has
+// to be counted by the driver.
+#[test]
+fn building_a_room_loses_no_interrupts() {
+    if !have(&[BANKED, BANKED_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let start = at_first_pass(BANKED, BANKED_MAP);
+    let build_room = address(BANKED_MAP, "build_room");
+    let ticks_at = address(BANKED_MAP, "ay_ticks");
+    let ticks =
+        |s: &Spectrum| u16::from_le_bytes([s.bus.peek_raw(ticks_at), s.bus.peek_raw(ticks_at + 1)]);
+    let (mut frames, mut counted) = (0u64, 0u16);
+    for room in 0..=255u8 {
+        let mut spec = start.clone();
+        spec.bus.poke(0x5B90, room);
+        spec.cpu.ix = 0x5B88;
+        let sentinel = 0x0000;
+        spec.cpu.sp = 0xF0F0;
+        spec.bus.poke(0xF0F0, 0);
+        spec.bus.poke(0xF0F1, 0);
+        spec.cpu.pc = build_room;
+        spec.cpu.iff1 = true;
+        spec.cpu.iff2 = true;
+        let (frame, tick) = (spec.bus.frame, ticks(&spec));
+        let mut returned = false;
+        for _ in 0..1_000_000 {
+            spec.step_instruction();
+            if spec.cpu.pc == sentinel && spec.cpu.sp == 0xF0F2 {
+                returned = true;
+                break;
+            }
+        }
+        assert!(returned, "building room {room} did not return");
+        frames += spec.bus.frame - frame;
+        counted = counted.wrapping_add(ticks(&spec).wrapping_sub(tick));
+    }
+    assert!(
+        frames > 100,
+        "only {frames} frames went by in 256 rooms: nothing measured"
+    );
+    assert_eq!(
+        u64::from(counted),
+        frames,
+        "interrupts the driver counted, against frames that began, building 256 rooms"
     );
 }
