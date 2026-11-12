@@ -261,6 +261,29 @@ fn what_each_phase_of_a_pass_uses() {
             c[5]
         ));
     }
+    // Every byte of the unnamed data a pass touches, however short the run:
+    // the rest can be paged out with the room builders (Step 2).
+    report.push_str("\nUnnamed data a pass uses, every run:\n");
+    let mut a = 0x6288u32;
+    while a < 0x7827 {
+        let in_pass = |a: u32| {
+            let f = flags(a as u16);
+            f[0] != 0 || f[1] != 0
+        };
+        if in_pass(a) {
+            let start = a;
+            while a < 0x7827 && in_pass(a) {
+                a += 1;
+            }
+            report.push_str(&format!(
+                "${start:04X}-${:04X} {}\n",
+                a - 1,
+                describe(flags(start as u16))
+            ));
+        } else {
+            a += 1;
+        }
+    }
     std::fs::write(OUT, &report).unwrap();
     eprintln!("{}", &report[..report.len().min(400)]);
 }

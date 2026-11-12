@@ -17,6 +17,8 @@ const FREE_MAP: &str = "assemblies/out/free fixed.map";
 const FAST_MAP: &str = "assemblies/out/fast fixed.map";
 const PACED: &str = "assemblies/out/paced fixed.szx";
 const PACED_MAP: &str = "assemblies/out/paced fixed.map";
+const BANKED: &str = "assemblies/out/banked fixed.szx";
+const BANKED_MAP: &str = "assemblies/out/banked fixed.map";
 
 fn have(files: &[&str]) -> bool {
     let missing: Vec<_> = files
@@ -88,7 +90,6 @@ fn play_by_pass(snap: &str, map: &str, passes: usize) -> Vec<Vec<u8>> {
 /// walking or with the controls left alone.
 fn play_on(mut spec: Spectrum, map: &str, passes: usize, first: u16, walk: bool) -> Vec<Vec<u8>> {
     let end_of_pass = address(map, "end_of_pass");
-    let list = address(map, "l_C745");
     let mut out = Vec::new();
     let mut steps = 0u64;
     let mut since = 0u64;
@@ -116,22 +117,7 @@ fn play_on(mut spec: Spectrum, map: &str, passes: usize, first: u16, walk: bool)
         if spec.cpu.pc == end_of_pass && count >= first && last != Some(count) {
             last = Some(count);
             since = steps;
-            let mut state: Vec<u8> = (0x4000..0x5B00).map(|a| spec.bus.peek_raw(a)).collect();
-            state.extend((0x5B00..0x6288).map(|a| spec.bus.peek_raw(a)));
-            // Two words here point into the draw list at l_C745, which is
-            // not where it was once the code before it has changed length:
-            // they are compared as how far into the list they point.
-            for at in [0x5B2Bu16, 0x5B2D] {
-                let i = usize::from(at - 0x4000);
-                let word = u16::from_le_bytes([state[i], state[i + 1]]).wrapping_sub(list);
-                state[i..i + 2].copy_from_slice(&word.to_le_bytes());
-            }
-            // $5B2F is where the pair test last looked. The faster build
-            // only writes it for a pair it is putting in order, the one
-            // thing that reads it, so at the end of a pass it holds an
-            // older place than the free build's and means nothing.
-            state[0x1B2F..0x1B31].fill(0);
-            out.push(state);
+            out.push(comparable(&spec, map));
         }
     }
     out
@@ -514,6 +500,16 @@ fn busy_machine(sna: &[u8], snap: &str, map: &str) -> Spectrum {
         spec.bus.poke(at, list as u8);
         spec.bus.poke(at + 1, (list >> 8) as u8);
     }
+    // And into its room data, which is at $6460 in the original and may not
+    // be in this build: the room's entry, and the low byte of the kinds
+    // table (see room_pointers_as_offsets).
+    let moved = room_base(map).wrapping_sub(0x6460);
+    let entry = u16::from_le_bytes([spec.bus.peek_raw(0x5B34), spec.bus.peek_raw(0x5B35)]);
+    let entry = entry.wrapping_add(moved);
+    spec.bus.poke(0x5B34, entry as u8);
+    spec.bus.poke(0x5B35, (entry >> 8) as u8);
+    let kinds = spec.bus.peek_raw(0x5B20).wrapping_add(moved as u8);
+    spec.bus.poke(0x5B20, kinds);
     spec.bus.set_joystick(zx_rustrum::joystick::Kind::Kempston);
     spec.cpu.pc = address(map, "end_of_pass");
     spec.cpu.sp = 0xF100;
@@ -710,6 +706,26 @@ fn the_paced_build_holds_five_frames_a_pass_at_turbo() {
     );
 }
 
+// The build that is played is the paced one with Step 2's banking on top,
+// and R left in its random numbers, so no other test runs it. Starting a
+// game goes through bank 3, so a banked build that was wrong would not get
+// as far as a pass, let alone hold five frames each.
+#[test]
+fn the_banked_build_that_is_played_holds_five_frames_a_pass_too() {
+    let (snap, map) = (
+        "assemblies/Alien 8 AY banked start.szx",
+        "assemblies/out/Alien 8 AY banked.map",
+    );
+    if !have(&[snap, map, "assemblies/out/busy90000.sna", "roms/128.rom"]) {
+        return;
+    }
+    let (room_1, busy) = passes_in_1000_frames(snap, map, 4);
+    assert!(
+        (195..=200).contains(&room_1) && (195..=200).contains(&busy),
+        "at 4x, {room_1} passes in 1,000 frames of the first room and {busy} of a busy one"
+    );
+}
+
 // Pacing only holds a pass back. A busy room takes ten frames a pass at the
 // machine's own speed, so there it must cost nothing.
 #[test]
@@ -798,4 +814,234 @@ fn a_snapshot_carries_a_bank_and_can_leave_paging_unlocked() {
     let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(&free.bus.ram[3 * 0x4000..4 * 0x4000], &page[..], "bank 3");
     assert!(!free.bus.paging_locked && locked.bus.paging_locked);
+}
+
+/// The screen, the variables and the objects, with the pointers in them that
+/// say where a build keeps things made into offsets.
+fn comparable(spec: &Spectrum, map: &str) -> Vec<u8> {
+    let mut state: Vec<u8> = (0x4000..0x6288).map(|a| spec.bus.peek_raw(a)).collect();
+    // Two words here point into the draw list at l_C745, which is not where
+    // it was once the code before it has changed length: they are compared
+    // as how far into the list they point.
+    let list = address(map, "l_C745");
+    for at in [0x5B2Bu16, 0x5B2D] {
+        let i = usize::from(at - 0x4000);
+        let word = u16::from_le_bytes([state[i], state[i + 1]]).wrapping_sub(list);
+        state[i..i + 2].copy_from_slice(&word.to_le_bytes());
+    }
+    // $5B2F is where the pair test last looked. The faster build only writes
+    // it for a pair it is putting in order, the one thing that reads it, so
+    // at the end of a pass it holds an older place than the free build's and
+    // means nothing.
+    state[0x1B2F..0x1B31].fill(0);
+    room_pointers_as_offsets(&mut state, map);
+    state
+}
+
+/// Where the room data starts: $6460, or bank 3 once Step 2 has moved it.
+fn room_base(map: &str) -> u16 {
+    let banked = std::fs::read_to_string(map)
+        .unwrap()
+        .lines()
+        .any(|l| l.starts_with("room_data $"));
+    if banked {
+        address(map, "room_data")
+    } else {
+        0x6460
+    }
+}
+
+/// $5B34 (the entry of the room the robot is in) points into the room data,
+/// which Step 2 moves; in a state from $4000, it is made into how far into
+/// it it points. So is $5B20, the table of object kinds a room is built
+/// from, but the game uses $5B21 for something else once the room is built,
+/// so when the word no longer points into the room data only its low byte
+/// is. Getting that wrong one way and not the other can only make a
+/// difference, never hide one.
+fn room_pointers_as_offsets(state: &mut [u8], map: &str) {
+    let base = room_base(map);
+    let word = u16::from_le_bytes([state[0x1B34], state[0x1B35]]).wrapping_sub(base);
+    state[0x1B34..0x1B36].copy_from_slice(&word.to_le_bytes());
+    let kinds = u16::from_le_bytes([state[0x1B20], state[0x1B21]]).wrapping_sub(base);
+    if kinds < 0x76E3 - 0x6460 {
+        state[0x1B20..0x1B22].copy_from_slice(&kinds.to_le_bytes());
+    } else {
+        state[0x1B20] = kinds as u8;
+    }
+}
+
+/// The first pass at which two runs part, with where and how many bytes.
+fn first_difference(a: &[Vec<u8>], b: &[Vec<u8>]) -> Option<String> {
+    a.iter().zip(b).enumerate().find_map(|(pass, (x, y))| {
+        let at = x.iter().zip(y).position(|(p, q)| p != q)?;
+        Some(format!(
+            "pass {pass}: ${:04X} is ${:02X} and ${:02X}, {} bytes differ",
+            0x4000 + at,
+            x[at],
+            y[at],
+            x.iter().zip(y).filter(|(p, q)| p != q).count()
+        ))
+    })
+}
+
+// Step 2 of assemblies/memory-plan.md moves the room data and the routines
+// that read it into bank 3, called with interrupts off. A game start reads
+// it (build_room_list), and the walk goes through a door at pass 34, so both
+// paths are in this; the busy rooms are the passes in between.
+#[test]
+fn the_banked_build_plays_the_same_game_pass_for_pass() {
+    let states: Vec<String> = BUSY
+        .iter()
+        .map(|f| format!("assemblies/out/busy{f}.sna"))
+        .collect();
+    let mut need: Vec<&str> = states.iter().map(String::as_str).collect();
+    need.extend([FAST, FAST_MAP, BANKED, BANKED_MAP, "roms/128.rom"]);
+    if !have(&need) {
+        return;
+    }
+    let passes = 2_000;
+    let fast = play_by_pass(FAST, FAST_MAP, passes);
+    let banked = play_by_pass(BANKED, BANKED_MAP, passes);
+    assert_eq!(
+        (fast.len(), banked.len()),
+        (passes, passes),
+        "the game ended early"
+    );
+    if let Some(what) = first_difference(&fast, &banked) {
+        panic!("walking from the start of a game, {what}");
+    }
+    for (frame, state) in BUSY.iter().zip(&states) {
+        let sna = std::fs::read(state).unwrap();
+        let fast = play_on(busy_machine(&sna, FAST, FAST_MAP), FAST_MAP, 120, 0, false);
+        let banked = play_on(
+            busy_machine(&sna, BANKED, BANKED_MAP),
+            BANKED_MAP,
+            120,
+            0,
+            false,
+        );
+        assert_eq!(
+            (fast.len(), banked.len()),
+            (120, 120),
+            "from frame {frame}, the game stopped"
+        );
+        if let Some(what) = first_difference(&fast, &banked) {
+            panic!("from frame {frame} of the recording, {what}");
+        }
+    }
+}
+
+/// A machine in a game, stopped at the end of pass FIRST_PASS.
+fn at_first_pass(snap: &str, map: &str) -> Spectrum {
+    let mut spec = machine(snap);
+    start_a_game(&mut spec);
+    let end_of_pass = address(map, "end_of_pass");
+    for _ in 0..50_000_000 {
+        let count = u16::from_le_bytes([spec.bus.peek_raw(0x5B02), spec.bus.peek_raw(0x5B03)]);
+        if spec.cpu.pc == end_of_pass && count >= FIRST_PASS {
+            return spec;
+        }
+        spec.step_instruction();
+    }
+    panic!("{snap} never reached pass {FIRST_PASS}");
+}
+
+/// The room data as the game would read it, wherever it is kept: $6460 to
+/// the valve list in the faster build, the start of bank 3 in the banked one.
+fn room_data(spec: &Spectrum, banked: bool) -> Vec<u8> {
+    (0..0x76E3 - 0x6460u16)
+        .map(|o| {
+            if banked {
+                spec.bus.bank_byte(3, o)
+            } else {
+                spec.bus.peek_raw(0x6460 + o)
+            }
+        })
+        .collect()
+}
+
+/// What building a room leaves: the variables and objects, the valve list,
+/// the buffer and the room data, with the pointer tables in it taken out,
+/// since those are moved with the data on purpose.
+fn after_building(spec: &Spectrum, map: &str) -> Vec<u8> {
+    let banked = room_base(map) != 0x6460;
+    let mut out = comparable(spec, map);
+    out.extend((0x76E3..0x7827).map(|a| spec.bus.peek_raw(a)));
+    out.extend((0xD200..0xEA00).map(|a| spec.bus.peek_raw(a)));
+    let mut room = room_data(spec, banked);
+    for (at, words) in [(0x73CAusize, 30), (0x740A, 7), (0x7519, 14)] {
+        room[at - 0x6460..at - 0x6460 + 2 * words].fill(0);
+    }
+    out.extend(room);
+    out
+}
+
+// The walk only ever goes through one door, so every room number the
+// builder can be asked for is built in both, from the same game: the room's
+// pieces and objects come out of the moved tables, and a pointer in them
+// left unmoved would read the hole in fixed memory. A number that is no
+// room clears the objects instead, and is compared as well. count_valves,
+// which reads every room's entry for the score at the end, is run after.
+#[test]
+fn every_room_is_built_the_same_from_bank_3() {
+    if !have(&[FAST, FAST_MAP, BANKED, BANKED_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let fast = at_first_pass(FAST, FAST_MAP);
+    let banked = at_first_pass(BANKED, BANKED_MAP);
+    assert_eq!(
+        first_difference(
+            &[after_building(&fast, FAST_MAP)],
+            &[after_building(&banked, BANKED_MAP)]
+        ),
+        None,
+        "the two games were not in the same state to begin with"
+    );
+    let mut built = std::collections::BTreeSet::new();
+    for room in 0..=255u8 {
+        let mut states = Vec::new();
+        for (spec, map) in [(&fast, FAST_MAP), (&banked, BANKED_MAP)] {
+            let mut spec = spec.clone();
+            spec.bus.poke(0x5B90, room);
+            spec.cpu.ix = 0x5B88;
+            call(&mut spec, address(map, "build_room"), 0, 0, 0);
+            if spec.bus.peek_raw(0x5C08) != 0 {
+                built.insert(room);
+            }
+            call(&mut spec, address(map, "count_valves"), 0, 0, 0);
+            states.push(after_building(&spec, map));
+        }
+        if let Some(what) = first_difference(&states[..1], &states[1..]) {
+            panic!("room {room}: {what} (past $6287, an offset into the valve list, buffer and room data)");
+        }
+    }
+    // Alien 8 has 128 rooms; a builder that never found one would pass the
+    // comparison by clearing every room the same.
+    assert_eq!(built.len(), 128, "room numbers that built a room");
+}
+
+// The one write a pass makes into the room data: when a room's chambers are
+// all fitted, the low three bits of its entry are set, through the pointer
+// room_found left at $5B34. In the banked build that pointer is into bank 3,
+// and the write has to land there and not in the hole in fixed memory.
+#[test]
+fn fitting_a_room_marks_its_entry_in_bank_3() {
+    if !have(&[BANKED, BANKED_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let mut spec = at_first_pass(BANKED, BANKED_MAP);
+    let entry = u16::from_le_bytes([spec.bus.peek_raw(0x5B34), spec.bus.peek_raw(0x5B35)]);
+    assert!((0xC000..0xD200).contains(&entry), "$5B34 is ${entry:04X}");
+    let before = spec.bus.bank_byte(3, entry - 0xC000);
+    let fixed = spec.bus.bank_byte(0, entry - 0xC000);
+    call(&mut spec, address(BANKED_MAP, "room_fitted"), 0, 0, 0);
+    assert_eq!(
+        (
+            spec.bus.bank_byte(3, entry - 0xC000),
+            spec.bus.peek_raw(0x5B0D),
+            spec.bus.bank_byte(0, entry - 0xC000)
+        ),
+        (before | 7, 7, fixed),
+        "the entry in bank 3, the room's kind of chamber, and bank 0 at the same address"
+    );
 }
