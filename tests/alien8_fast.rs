@@ -200,14 +200,29 @@ fn copy_rect_copies_every_rectangle_as_the_old_one_did() {
     if !have(&[FREE, FAST, FREE_MAP, FAST_MAP, "roms/128.rom"]) {
         return;
     }
+    copy_rect_against_free(FAST, FAST_MAP);
+}
+
+// Step 10 of the memory plan copies a character cell at a time, with the
+// line's start put back rather than worked out, and leaves rectangles at the
+// right-hand edge to the old loop. Bottoms partway through a cell and runs
+// over the edges of thirds are where that could go wrong.
+#[test]
+fn copy_rect_a_cell_at_a_time_copies_every_rectangle_as_the_old_one_did() {
+    if !have(&[FREE, FREE_MAP, BANKED, BANKED_MAP, "roms/128.rom"]) {
+        return;
+    }
+    copy_rect_against_free(BANKED, BANKED_MAP);
+}
+
+/// Every rectangle up to ten wide, from several bottom lines, copied to the
+/// screen by the free-running build's copy_rect and by `snap`'s.
+fn copy_rect_against_free(snap: &str, map: &str) {
     let mut free = machine(FREE);
-    let mut fast = machine(FAST);
-    let (at_free, at_fast) = (
-        address(FREE_MAP, "copy_rect"),
-        address(FAST_MAP, "copy_rect"),
-    );
-    let buffer = address(FREE_MAP, "buffer");
-    for spec in [&mut free, &mut fast] {
+    let mut fast = machine(snap);
+    let (at_free, at_fast) = (address(FREE_MAP, "copy_rect"), address(map, "copy_rect"));
+    let (buffer_free, buffer_fast) = (address(FREE_MAP, "buffer"), address(map, "buffer"));
+    for (spec, buffer) in [(&mut free, buffer_free), (&mut fast, buffer_fast)] {
         for i in 0..0x1800u16 {
             spec.bus
                 .poke(buffer + i, (i.wrapping_mul(97) >> 3) as u8 ^ (i as u8));
@@ -218,27 +233,34 @@ fn copy_rect_copies_every_rectangle_as_the_old_one_did() {
     let mut tried = 0;
     for x in 0..32u16 {
         for width in 1..=(32 - x).min(10) {
-            for (bottom, rows) in [(7u16, 8u16), (63, 20), (64, 1), (191, 30), (127, 9)] {
-                let (bc, de, hl) = (
-                    rows << 8 | width,
-                    screen(x, bottom),
-                    // The buffer runs the other way: a row up the screen is
-                    // 32 bytes on in the buffer, so start low enough in it.
-                    buffer + (191 - bottom) * 32 + x,
-                );
+            for (bottom, rows) in [
+                (7u16, 8u16),
+                (63, 20),
+                (64, 1),
+                (191, 30),
+                (127, 9),
+                (100, 13),
+                (130, 40),
+                (66, 3),
+                (191, 192),
+            ] {
+                let row = (191 - bottom) * 32 + x;
+                let (bc, de) = (rows << 8 | width, screen(x, bottom));
                 for i in 0x4000..0x5800u16 {
                     free.bus.poke(i, 0);
                     fast.bus.poke(i, 0);
                 }
-                call(&mut free, at_free, bc, de, hl);
-                call(&mut fast, at_fast, bc, de, hl);
+                // The buffer runs the other way: a row up the screen is 32
+                // bytes on in the buffer, so start low enough in it.
+                call(&mut free, at_free, bc, de, buffer_free + row);
+                call(&mut fast, at_fast, bc, de, buffer_fast + row);
                 tried += 1;
                 if let Some(a) =
                     (0x4000..0x5800u16).find(|a| free.bus.peek_raw(*a) != fast.bus.peek_raw(*a))
                 {
                     panic!(
                         "{width} wide, {rows} rows up from line {bottom} at column {x}: ${a:04X} is ${:02X} \
-                         from the old copy_rect and ${:02X} from the new",
+                         from the old copy_rect and ${:02X} from {snap}'s",
                         free.bus.peek_raw(a),
                         fast.bus.peek_raw(a)
                     );
