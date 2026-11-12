@@ -165,8 +165,10 @@ fn call(spec: &mut Spectrum, at: u16, bc: u16, de: u16, hl: u16) {
     // 4 of the memory plan, fixed memory after, where a trampoline that pages
     // can push in one bank and pop in another.
     // SP is put back afterwards, or a test making thousands of calls walks
-    // the stack down into the buffer.
+    // the stack down into the buffer; and PC and the interrupts, or a test
+    // that lets the game run on afterwards runs the ROM from its sentinel.
     let was = spec.cpu.sp;
+    let (pc, iff1, iff2) = (spec.cpu.pc, spec.cpu.iff1, spec.cpu.iff2);
     let top = was.wrapping_sub(64);
     spec.cpu.sp = top;
     spec.bus.poke(top, (sentinel & 0xFF) as u8);
@@ -184,6 +186,9 @@ fn call(spec: &mut Spectrum, at: u16, bc: u16, de: u16, hl: u16) {
         spec.step_instruction();
         if spec.cpu.pc == sentinel && spec.cpu.sp == top + 2 {
             spec.cpu.sp = was;
+            spec.cpu.pc = pc;
+            spec.cpu.iff1 = iff1;
+            spec.cpu.iff2 = iff2;
             return;
         }
     }
@@ -1703,5 +1708,155 @@ fn a_pre_shifted_copy_draws_what_shifting_would() {
     assert!(
         copies > 800,
         "only {copies} of {drawn} draws used a pre-shifted copy"
+    );
+}
+
+/// Runs the interrupt's work for one effects channel, `block` being
+/// fx_robot or fx_world: what ay_int does for it fifty times a second.
+fn fx_tick(spec: &mut Spectrum, map: &str, block: &str) {
+    spec.cpu.iy = address(map, block);
+    call(spec, address(map, "fx_tick"), 0, 0, 0);
+}
+
+// Step 13 of the memory plan moves the sound effects off channel A, where
+// they were blips the AY's envelope faded out in a fraction of a frame, to
+// channels of their own: the robot's on B, everything else's on C, each held
+// at full volume for as long as it is queued and then let fall by 2 a frame.
+// A beep of 64 clicks at pitch $80 is 64 x 53 = 3,392 units long, and a frame
+// takes 1,108 off it: three frames leave 68, and the fourth finds it gone.
+// So it has to be heard at full volume for three frames and then fall to
+// nothing over eight, on
+// the robot's channel when the robot makes it and the world's otherwise,
+// with the tune's channel A left alone and the other effects channel too.
+#[test]
+fn an_effect_is_held_on_its_own_channel_and_then_let_go() {
+    if !have(&[BANKED, BANKED_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let start = at_first_pass(BANKED, BANKED_MAP);
+    assert_eq!(
+        start.bus.audio.ay.regs[7] & 0x07,
+        0,
+        "tones on A, B and C in the mixer (register 7 is ${:02X})",
+        start.bus.audio.ay.regs[7]
+    );
+    let pitch = 0x80u8;
+    let tone = u16::from(
+        start
+            .bus
+            .peek_raw(address(BANKED_MAP, "ay_pitch") + u16::from(pitch)),
+    );
+    for (ix, block, tone_reg, volume, other) in [
+        (0x5B88u16, "fx_robot", 2usize, 9usize, 10usize),
+        (0x5C08, "fx_world", 4, 10, 9),
+    ] {
+        let mut spec = start.clone();
+        // Quiet to begin with, so what is heard is this beep.
+        for b in ["fx_robot", "fx_world"] {
+            for _ in 0..10 {
+                fx_tick(&mut spec, BANKED_MAP, b);
+            }
+        }
+        let before = spec.bus.audio.ay.regs;
+        spec.cpu.ix = ix;
+        call(
+            &mut spec,
+            address(BANKED_MAP, "beep"),
+            u16::from(pitch) << 8 | 64,
+            0,
+            0,
+        );
+        let regs = spec.bus.audio.ay.regs;
+        assert_eq!(
+            (
+                u16::from_le_bytes([regs[tone_reg], regs[tone_reg + 1]]),
+                regs[volume]
+            ),
+            (tone, 15),
+            "{block}: the beep's tone and volume as it starts"
+        );
+        assert_eq!(
+            regs[other], before[other],
+            "{block}: the other effects channel"
+        );
+        assert_eq!(
+            (regs[0], regs[1], regs[8]),
+            (before[0], before[1], before[8]),
+            "{block}: channel A"
+        );
+        let mut levels = Vec::new();
+        for _ in 0..12 {
+            fx_tick(&mut spec, BANKED_MAP, block);
+            levels.push(spec.bus.audio.ay.regs[volume]);
+        }
+        assert_eq!(
+            levels,
+            [15, 15, 15, 13, 11, 9, 7, 5, 3, 1, 0, 0],
+            "{block}: the volume, a frame at a time, as the beep is held and let go"
+        );
+    }
+    // And it is the interrupt that does it: the game left to run, with the
+    // robot standing still and so making no sound of its own, lets the
+    // robot's beep go by itself.
+    let mut spec = start.clone();
+    spec.cpu.ix = 0x5B88;
+    call(
+        &mut spec,
+        address(BANKED_MAP, "beep"),
+        u16::from(pitch) << 8 | 64,
+        0,
+        0,
+    );
+    let t = spec.bus.model.frame_t();
+    let mut levels = Vec::new();
+    for _ in 0..20 {
+        spec.run(t);
+        levels.push(spec.bus.audio.ay.regs[9]);
+    }
+    assert!(
+        levels[0] == 15 && levels[19] == 0 && levels.windows(2).all(|w| w[1] <= w[0]),
+        "channel B a frame at a time with the game running: {levels:?}"
+    );
+}
+
+// The game queues a sound and goes on, and a sound from a later pass used to
+// cut off whatever was left of the last, whatever it was. Now it only cuts
+// off its own channel's: the world's sounds can't stop the robot's.
+#[test]
+fn a_later_pass_cuts_off_only_its_own_channel() {
+    if !have(&[BANKED, BANKED_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let mut spec = at_first_pass(BANKED, BANKED_MAP);
+    let beep = address(BANKED_MAP, "beep");
+    spec.cpu.ix = 0x5B88;
+    call(&mut spec, beep, 0x8040, 0, 0);
+    let pass = u16::from_le_bytes([spec.bus.peek_raw(0x5B02), spec.bus.peek_raw(0x5B03)]);
+    spec.bus.poke(0x5B02, (pass + 1) as u8);
+    spec.cpu.ix = 0x5C08;
+    call(&mut spec, beep, 0x4040, 0, 0);
+    let robot = address(BANKED_MAP, "fx_robot");
+    let queued = |s: &Spectrum| {
+        s.bus
+            .peek_raw(robot + 1)
+            .wrapping_sub(s.bus.peek_raw(robot))
+            & 0x3F
+    };
+    assert_eq!(
+        queued(&spec),
+        4,
+        "the robot's beep is still queued after the world's, from a later pass"
+    );
+    // And from a later pass on its own channel, it goes.
+    spec.bus.poke(0x5B02, (pass + 2) as u8);
+    spec.cpu.ix = 0x5B88;
+    call(&mut spec, beep, 0x2040, 0, 0);
+    let front = spec.bus.peek_raw(robot);
+    let tone = spec.bus.peek_raw(robot + 8 + u16::from(front));
+    let want = spec.bus.peek_raw(address(BANKED_MAP, "ay_pitch") + 0x20);
+    assert_eq!(
+        (queued(&spec), tone),
+        (4, want),
+        "the robot's own later beep replaces its first"
     );
 }
