@@ -924,8 +924,11 @@ fn comparable(spec: &Spectrum, map: &str) -> Vec<u8> {
     // $5B2F is where the pair test last looked. The faster build only writes
     // it for a pair it is putting in order, the one thing that reads it, so
     // at the end of a pass it holds an older place than the free build's and
-    // means nothing.
-    state[0x1B2F..0x1B31].fill(0);
+    // means nothing. $5B2D is where in the list the object last drawn was:
+    // since Step 15 draws objects whose sprites do not meet in whichever
+    // order it comes to them, the last can differ, and only draw_in_order
+    // reads it, after writing it.
+    state[0x1B2D..0x1B31].fill(0);
     room_pointers_as_offsets(&mut state, map);
     // $5B09 is where draw_sprite keeps SP while it reads the sprite with POP,
     // and nothing else reads it. Step 4 moved the stack, and a sprite drawn
@@ -998,7 +1001,10 @@ fn first_difference(a: &[Vec<u8>], b: &[Vec<u8>]) -> Option<String> {
 // Step 2 of assemblies/memory-plan.md moves the room data and the routines
 // that read it into bank 3, called with interrupts off. A game start reads
 // it (build_room_list), and the walk goes through a door at pass 34, so both
-// paths are in this; the busy rooms are the passes in between.
+// paths are in this; the busy rooms are the passes in between. Since Step
+// 15 a screen byte may differ under two objects with no order between them
+// in depth, which the faster build draws one way round by chance; every
+// other byte, the objects and variables included, has to be the same.
 #[test]
 fn the_banked_build_plays_the_same_game_pass_for_pass() {
     let states: Vec<String> = BUSY
@@ -1018,7 +1024,8 @@ fn the_banked_build_plays_the_same_game_pass_for_pass() {
         (passes, passes),
         "the game ended early"
     );
-    if let Some(what) = first_difference(&fast, &banked) {
+    let (what, mut allowed) = first_difference_but_unordered(&fast, &banked);
+    if let Some(what) = what {
         panic!("walking from the start of a game, {what}");
     }
     for (frame, state) in BUSY.iter().zip(&states) {
@@ -1036,9 +1043,11 @@ fn the_banked_build_plays_the_same_game_pass_for_pass() {
             (120, 120),
             "from frame {frame}, the game stopped"
         );
-        if let Some(what) = first_difference(&fast, &banked) {
+        let (what, more) = first_difference_but_unordered(&fast, &banked);
+        if let Some(what) = what {
             panic!("from frame {frame} of the recording, {what}");
         }
+        allowed += more;
     }
     // The room the played build slowed down in, saved from the emulator: 37
     // objects, 23 drawn a pass, and the most pairs put in order of any.
@@ -1057,10 +1066,13 @@ fn the_banked_build_plays_the_same_game_pass_for_pass() {
             (300, 300),
             "in the saved room, the game stopped"
         );
-        if let Some(what) = first_difference(&fast, &banked) {
+        let (what, more) = first_difference_but_unordered(&fast, &banked);
+        if let Some(what) = what {
             panic!("in the saved room, {what}");
         }
+        allowed += more;
     }
+    eprintln!("{allowed} passes differed under objects with no order between them");
 }
 
 /// A machine in a game, stopped at the end of pass FIRST_PASS.
@@ -1547,18 +1559,140 @@ fn the_mirrored_copies_make_the_busiest_room_faster() {
     );
 }
 
+/// What the pair test says of objects `a` and `b` in `objects` (from
+/// $5B88): 1 if `b` must be drawn first, 2 if they pass through each other,
+/// else 0. The arithmetic of draw_in_order's depth_ix_z to depth_outcome.
+fn depth_outcome(objects: &[u8], a: usize, b: usize) -> u8 {
+    const OUTCOMES: [u8; 27] = [
+        0, 0, 0, 1, 1, 0, 1, 1, 0, 0, 0, 0, 1, 2, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    ];
+    let f = |o: usize, k: usize| objects[o * 32 + k];
+    let mut code: usize = if f(a, 3) >= f(b, 3).wrapping_add(f(b, 6)) {
+        0
+    } else if f(b, 3) < f(a, 3).wrapping_add(f(a, 6)) {
+        1
+    } else {
+        2
+    };
+    for (at, size, step) in [(2, 5, 3), (1, 4, 9)] {
+        if f(a, at).wrapping_sub(f(a, size)) < f(b, at).wrapping_add(f(b, size)) {
+            code += if f(b, at).wrapping_sub(f(b, size)) < f(a, at).wrapping_add(f(a, size)) {
+                step
+            } else {
+                2 * step
+            };
+        }
+    }
+    OUTCOMES[code]
+}
+
+/// The pairs whose sprites share a byte of the buffer that `order` draws
+/// with the one that must come first after the other.
+fn drawn_against_depth(order: &[u8], objects: &[u8]) -> Vec<(usize, usize)> {
+    let rect = |o: usize| {
+        let f = |k: usize| i32::from(objects[o * 32 + k]);
+        (
+            f(0x1A) >> 3,
+            (f(0x1A) >> 3) + f(0x18),
+            f(0x1B),
+            f(0x1B) + f(0x19),
+        )
+    };
+    let mut wrong = Vec::new();
+    for (i, a) in order.iter().enumerate() {
+        for b in &order[i + 1..] {
+            let (a, b) = (usize::from(*a), usize::from(*b));
+            let (p, q) = (rect(a), rect(b));
+            let meet = p.0 < q.1 && q.0 < p.1 && p.2 < q.3 && q.2 < p.3;
+            if meet && depth_outcome(objects, a, b) == 1 {
+                wrong.push((a, b));
+            }
+        }
+    }
+    wrong
+}
+
+/// Whether both of a pair's sprites cover byte `column` of buffer row `row`.
+fn under_pair(objects: &[u8], (a, b): (usize, usize), column: i32, row: i32) -> bool {
+    [a, b].iter().all(|o| {
+        let f = |k: usize| i32::from(objects[o * 32 + k]);
+        let x = f(0x1A) >> 3;
+        x <= column && column < x + f(0x18) && f(0x1B) <= row && row < f(0x1B) + f(0x19)
+    })
+}
+
+/// Whether two objects' sprites both cover byte `column` of buffer row
+/// `row` with no order between them in depth, either way round: the one
+/// place drawing them in another order may leave a different picture.
+fn under_unordered(objects: &[u8], column: i32, row: i32) -> bool {
+    let covering: Vec<usize> = (0..objects.len() / 32)
+        .filter(|o| {
+            let f = |k: usize| i32::from(objects[o * 32 + k]);
+            let x = f(0x1A) >> 3;
+            f(0) != 0
+                && x <= column
+                && column < x + f(0x18)
+                && f(0x1B) <= row
+                && row < f(0x1B) + f(0x19)
+        })
+        .collect();
+    covering.iter().enumerate().any(|(i, a)| {
+        covering[i + 1..]
+            .iter()
+            .any(|b| depth_outcome(objects, *a, *b) != 1 && depth_outcome(objects, *b, *a) != 1)
+    })
+}
+
+/// The first pass at which the banked build's state parts from the faster
+/// build's (both from `comparable`), allowing a screen byte to differ only
+/// where under_unordered says the order could change it; and how many
+/// passes differed in that way.
+fn first_difference_but_unordered(fast: &[Vec<u8>], banked: &[Vec<u8>]) -> (Option<String>, usize) {
+    let mut allowed = 0;
+    for (pass, (x, y)) in fast.iter().zip(banked).enumerate() {
+        // Each is taken at end_of_pass, before that pass draws: the picture
+        // is what the pass before drew, from its objects.
+        let objects = &fast[pass.saturating_sub(1)][0x1B88..0x2288];
+        let mut differs = false;
+        for (at, (p, q)) in x.iter().zip(y).enumerate() {
+            if p == q {
+                continue;
+            }
+            // The bitmap: the buffer goes up the screen from its bottom line.
+            let line = ((at >> 8) & 7) | ((at >> 2) & 0x38) | ((at >> 5) & 0xC0);
+            if at >= 0x1800 || !under_unordered(objects, (at & 31) as i32, 191 - line as i32) {
+                return (
+                    Some(format!(
+                        "pass {pass}: ${:04X} is ${p:02X} and ${q:02X}, under no two objects \
+                         without an order between them",
+                        0x4000 + at
+                    )),
+                    allowed,
+                );
+            }
+            differs = true;
+        }
+        allowed += usize::from(differs);
+    }
+    (None, allowed)
+}
+
 // Step 11 of the memory plan: after drawing an object, draw_in_order goes
 // back one step down its chain of "what is in front of this" rather than
 // beginning again from the first object left, and gives up and begins again
 // once a passing pair has turned a valve into something else, since a
-// second test of the same pair could then change something too. Rooms only
-// make the orders they make, so here the objects of the room at frame
-// 90,000 are scattered at random, thousands of times: piled up so that
-// cycles happen, a few of them valves without the flag that stops a passing
-// pair changing anything. The order the objects are drawn in, and
-// every object afterwards, have to be the same as beginning again.
+// second test of the same pair could then change something too. Step 15
+// then leaves out the depth test for a pair whose sprites do not meet on the
+// screen, so two such objects may now be drawn the other way round, which
+// cannot change a pixel. Rooms only make the orders they make, so here the
+// objects of the room at frame 90,000 are scattered at random, thousands of
+// times: piled up so that cycles happen, a few of them valves without the
+// flag that stops a passing pair changing anything. Each is sized where it
+// now stands, as moving does in the game, so that its sprite's rectangle is
+// where it will be drawn. The buffer drawn, and every object afterwards,
+// have to be the same as beginning again.
 #[test]
-fn the_drawing_order_is_the_same_as_beginning_again() {
+fn drawing_in_order_draws_the_same_as_beginning_again() {
     if !have(&[
         FAST,
         FAST_MAP,
@@ -1581,7 +1715,8 @@ fn the_drawing_order_is_the_same_as_beginning_again() {
         seed ^= seed << 17;
         seed
     };
-    let (mut passed, mut objects, mut backs) = (0u32, 0usize, 0u32);
+    let (mut passed, mut objects, mut backs, mut reordered) = (0u32, 0usize, 0u32, 0u32);
+    let (mut differed, mut wrong) = (0u32, (0u32, 0u32));
     for trial in 0..3_000 {
         // The same scattering for both builds.
         let mut pokes = Vec::new();
@@ -1610,6 +1745,13 @@ fn the_drawing_order_is_the_same_as_beginning_again() {
             let mut spec = room.clone();
             for (at, v) in &pokes {
                 spec.bus.poke(*at, *v);
+            }
+            for slot in 4..56u16 {
+                let at = 0x5B88 + 32 * slot;
+                if spec.bus.peek_raw(at) != 0 {
+                    spec.cpu.ix = at;
+                    call(&mut spec, address(map, "sprite_size"), 0, 0, 0);
+                }
             }
             call(&mut spec, address(map, "list_to_draw"), 0, 0, 0);
             // Every draw_object, in order, by the object it was called for.
@@ -1651,14 +1793,55 @@ fn the_drawing_order_is_the_same_as_beginning_again() {
             let state: Vec<u8> = (0x5B88..0x6288).map(|a| spec.bus.peek_raw(a)).collect();
             let passing =
                 map == &BANKED_MAP && spec.bus.peek_raw(address(map, "draw_order_passed")) != 0;
-            runs.push((order, state, passing));
+            let buffer = address(map, "buffer");
+            let drawn: Vec<u8> = (buffer..buffer + 0x1800)
+                .map(|a| spec.bus.peek_raw(a))
+                .collect();
+            runs.push((order, state, passing, drawn));
         }
         let (old, new) = (&runs[0], &runs[1]);
-        assert_eq!(
-            old.0, new.0,
-            "trial {trial}: the order objects were drawn in (a passing pair changed something: {})",
-            new.2
-        );
+        // A cycle is broken by drawing one object of it against its depth
+        // test, and where the cycle ran through a pair Step 15 no longer
+        // tests, there is no cycle to break: so the old order may draw a
+        // pair whose sprites meet the wrong way round where the new does not.
+        // Either order may break a cycle, and at a different pair. So a
+        // byte may only differ under such a pair, or under two objects with
+        // no order between them, which each order draws one way round by
+        // chance.
+        let broken = [
+            drawn_against_depth(&old.0, &old.1),
+            drawn_against_depth(&new.0, &old.1),
+        ];
+        wrong.0 += u32::from(!broken[0].is_empty());
+        wrong.1 += u32::from(!broken[1].is_empty());
+        let unexplained = (0..0x1800).find(|i| {
+            let (column, row) = ((i % 32) as i32, (i / 32) as i32);
+            old.3[*i] != new.3[*i]
+                && !under_unordered(&old.1, column, row)
+                && !broken
+                    .iter()
+                    .flatten()
+                    .any(|p| under_pair(&old.1, *p, column, row))
+        });
+        if old.3 != new.3 {
+            let i = unexplained.unwrap_or(0);
+            assert!(
+                unexplained.is_none(),
+                "trial {trial}: buffer byte {i} (column {}, row {}) is ${:02X} and ${:02X}, \
+                 under no two objects without an order and no pair drawn against its depth \
+                 test ({:?} before, {:?} after); drawn in the order {:?} and {:?}",
+                i % 32,
+                i / 32,
+                old.3[i],
+                new.3[i],
+                broken[0],
+                broken[1],
+                old.0,
+                new.0,
+            );
+            differed += 1;
+        }
+        reordered += u32::from(old.0 != new.0);
         if let Some(i) = old.1.iter().zip(&new.1).position(|(a, b)| a != b) {
             panic!(
                 "trial {trial}: ${:04X} is ${:02X} and ${:02X} after drawing",
@@ -1672,7 +1855,17 @@ fn the_drawing_order_is_the_same_as_beginning_again() {
     }
     eprintln!(
         "{objects} objects drawn; {passed} trials where a passing pair changed something; \
-         {backs} steps back down a chain"
+         {backs} steps back down a chain; {reordered} drawn in another order; \
+         {differed} drawn differently; trials with a pair that meets drawn against its \
+         depth test, before and after: {wrong:?}"
+    );
+    assert!(
+        wrong.1 <= wrong.0,
+        "more trials drew a pair that meets against its depth test: {wrong:?}"
+    );
+    assert!(
+        reordered > 1_000,
+        "only {reordered} of 3,000 trials were drawn in another order: Step 15 was hardly tried"
     );
     assert!(
         backs > 10_000,
