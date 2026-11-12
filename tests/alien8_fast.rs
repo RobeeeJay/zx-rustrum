@@ -498,8 +498,15 @@ fn the_scan_marks_the_same_objects() {
 /// carried into it: the screen, the variables and objects, and the buffer.
 fn busy_machine(sna: &[u8], snap: &str, map: &str) -> Spectrum {
     let mut spec = machine(snap);
-    for a in (0x4000..0x6288u32).chain(0xD200..0xEA00) {
+    for a in 0x4000..0x6288u32 {
         spec.bus.poke(a as u16, sna[27 + a as usize - 0x4000]);
+    }
+    // The original's buffer is at $D200; a build's is wherever its map says,
+    // which is $9800 since Step 5 of the memory plan.
+    let buffer = address(map, "buffer");
+    for i in 0..0x1800u16 {
+        spec.bus
+            .poke(buffer + i, sna[27 + 0xD200 - 0x4000 + usize::from(i)]);
     }
     // The original game's pointers into its own draw list; both builds set
     // them before they read them.
@@ -996,7 +1003,8 @@ fn after_building(spec: &Spectrum, map: &str) -> Vec<u8> {
     let banked = room_base(map) != 0x6460;
     let mut out = comparable(spec, map);
     out.extend((0x76E3..0x7827).map(|a| spec.bus.peek_raw(a)));
-    out.extend((0xD200..0xEA00).map(|a| spec.bus.peek_raw(a)));
+    let buffer = address(map, "buffer");
+    out.extend((buffer..buffer + 0x1800).map(|a| spec.bus.peek_raw(a)));
     let mut room = room_data(spec, banked);
     for (at, words) in [(0x73CAusize, 30), (0x740A, 7), (0x7519, 14)] {
         room[at - 0x6460..at - 0x6460 + 2 * words].fill(0);
@@ -1209,5 +1217,146 @@ fn a_game_ends_the_same_from_bank_3() {
         first_difference(&fast.2, &banked.2),
         None,
         "the passes after"
+    );
+}
+
+// Step 5 of the memory plan moves the bit-reversal and shift tables from
+// $F100 to the 4K block at `tables`, and build_tables, which makes them at
+// the start of a game, has its top page written in as a number. The image
+// already holds the finished tables, so a builder writing them somewhere
+// else would go unnoticed by everything that only reads them: here they
+// are emptied and built again in both builds, and have to come out the same
+// and where they are read.
+#[test]
+fn the_tables_are_built_where_they_are_read() {
+    if !have(&[FAST, FAST_MAP, BANKED, BANKED_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let mut built = Vec::new();
+    for (snap, map) in [(FAST, FAST_MAP), (BANKED, BANKED_MAP)] {
+        let mut spec = machine(snap);
+        let at = address(map, "reverse_table");
+        for a in at..=at + 0xEFF {
+            spec.bus.poke(a, 0);
+        }
+        call(&mut spec, address(map, "build_tables"), 0, 0, 0);
+        built.push(
+            (at..=at + 0xEFF)
+                .map(|a| spec.bus.peek_raw(a))
+                .collect::<Vec<u8>>(),
+        );
+    }
+    assert!(
+        built[0].iter().any(|b| *b != 0),
+        "the faster build built nothing"
+    );
+    assert_eq!(
+        first_difference(&built[..1], &built[1..]),
+        None,
+        "the tables, from reverse_table in each build"
+    );
+}
+
+const STEP4: &str = "assemblies/out/banked step4.szx";
+const STEP4_MAP: &str = "assemblies/out/banked step4.map";
+const PROFILE: &str = "assemblies/out/profile.txt";
+
+/// T-states spent at each label of the main image, while `spec` runs `frames`.
+fn profile(
+    spec: &mut Spectrum,
+    map: &str,
+    frames: u64,
+    into: &mut std::collections::BTreeMap<String, u64>,
+) {
+    let mut names: Vec<(u16, String)> = std::fs::read_to_string(map)
+        .unwrap()
+        .lines()
+        .filter(|l| l.split_whitespace().count() == 2)
+        .filter_map(|l| {
+            let (n, a) = l.split_once(" $")?;
+            Some((u16::from_str_radix(a, 16).ok()?, n.to_string()))
+        })
+        .collect();
+    names.sort();
+    let end = spec.bus.frame + frames;
+    while spec.bus.frame < end {
+        let pc = spec.cpu.pc;
+        let t = spec.bus.total_t();
+        spec.step_instruction();
+        // Above $C000 only bank 0 is the main image's.
+        if pc < 0x4000 || pc >= 0xC000 && spec.bus.page_reg & 7 != 0 {
+            continue;
+        }
+        let i = names.partition_point(|(a, _)| *a <= pc);
+        if i > 0 {
+            *into.entry(names[i - 1].1.clone()).or_default() += spec.bus.total_t() - t;
+        }
+    }
+}
+
+// Step 5 of the memory plan puts the hottest code in bank 2, which is not
+// contended, and the rest in bank 5, which is. It first went by the calls a
+// frame in the notes, which put mirror_row and mirror_store, a fifth of the
+// time in a busy room, in contended memory. So it goes by this instead: the
+// T-states each label took in the Step 4 build, walking about the first room
+// and in the three busy rooms. Run by assemblies/fast.sh, which then builds
+// Step 5 from it.
+#[test]
+#[ignore]
+fn profile_the_layout_of_step_5_goes_by() {
+    if !have(&[STEP4, STEP4_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let mut spent = std::collections::BTreeMap::new();
+    let mut spec = at_first_pass(STEP4, STEP4_MAP);
+    let t = spec.bus.model.frame_t();
+    for i in 0..20 {
+        let (row, bit) = WALK[i % WALK.len()];
+        key(&mut spec, row, bit, true);
+        profile(&mut spec, STEP4_MAP, 50, &mut spent);
+        key(&mut spec, row, bit, false);
+    }
+    let _ = t;
+    for frame in BUSY {
+        let sna = std::fs::read(format!("assemblies/out/busy{frame}.sna")).unwrap();
+        let mut spec = busy_machine(&sna, STEP4, STEP4_MAP);
+        profile(&mut spec, STEP4_MAP, 1_000, &mut spent);
+    }
+    let total: u64 = spent.values().sum();
+    assert!(total > 100_000_000, "only {total} T-states profiled");
+    let mut out =
+        String::from("label T-states (Step 4 build: first room walked, three busy rooms)\n");
+    for (name, t) in &spent {
+        out.push_str(&format!("{name} {t}\n"));
+    }
+    std::fs::write(PROFILE, out).unwrap();
+}
+
+// The CPU puts I and R on the address bus to refresh memory after every
+// opcode fetch. With I at $40-$7F that is an address in contended memory:
+// the ULA snows, this emulator slows every instruction down, and a real
+// 128K is known to crash. Step 3 of the memory plan put the IM 2 table at
+// $6500 and did all three; it was found as a 3% slowdown in Step 5. The
+// table is in bank 2 now, and I has to stay out of contended memory for a
+// whole game: started, walked, and through a room change.
+#[test]
+fn i_never_points_into_contended_memory() {
+    if !have(&[BANKED, BANKED_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let mut spec = machine(BANKED);
+    let t = spec.bus.model.frame_t();
+    let mut seen = std::collections::BTreeSet::new();
+    for f in 0..3_000 {
+        key(&mut spec, 4, 0, (600..620).contains(&f));
+        spec.run(t);
+        if spec.cpu.im == 2 {
+            seen.insert(spec.cpu.i);
+        }
+    }
+    assert!(!seen.is_empty(), "the game never set IM 2");
+    assert!(
+        seen.iter().all(|i| !(0x40..0x80).contains(i)),
+        "I was ${seen:02X?}"
     );
 }
