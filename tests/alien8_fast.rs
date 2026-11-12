@@ -1465,3 +1465,140 @@ fn the_mirrored_copies_make_the_busiest_room_faster() {
         "passes in 1,000 frames: {busy} against {fast_busy} in the busy room, {first} against {fast_first} in the first"
     );
 }
+
+// Step 11 of the memory plan: after drawing an object, draw_in_order goes
+// back one step down its chain of "what is in front of this" rather than
+// beginning again from the first object left, and gives up and begins again
+// once a passing pair has turned a valve into something else, since a
+// second test of the same pair could then change something too. Rooms only
+// make the orders they make, so here the objects of the room at frame
+// 90,000 are scattered at random, thousands of times: piled up so that
+// cycles happen, a few of them valves without the flag that stops a passing
+// pair changing anything. The order the objects are drawn in, and
+// every object afterwards, have to be the same as beginning again.
+#[test]
+fn the_drawing_order_is_the_same_as_beginning_again() {
+    if !have(&[
+        FAST,
+        FAST_MAP,
+        BANKED,
+        BANKED_MAP,
+        "assemblies/out/busy90000.sna",
+        "roms/128.rom",
+    ]) {
+        return;
+    }
+    let sna = std::fs::read("assemblies/out/busy90000.sna").unwrap();
+    let rooms = [
+        (busy_machine(&sna, FAST, FAST_MAP), FAST_MAP),
+        (busy_machine(&sna, BANKED, BANKED_MAP), BANKED_MAP),
+    ];
+    let mut seed = 0x2545_F491_4F6C_DD1Du64;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        seed
+    };
+    let (mut passed, mut objects, mut backs) = (0u32, 0usize, 0u32);
+    for trial in 0..3_000 {
+        // The same scattering for both builds.
+        let mut pokes = Vec::new();
+        for slot in 4..56u16 {
+            let at = 0x5B88 + 32 * slot;
+            if rooms[0].0.bus.peek_raw(at) == 0 {
+                continue;
+            }
+            let r = next();
+            // Mostly with the flag that keeps passing pairs from changing
+            // anything, and a valve without it now and then.
+            let mut flags = rooms[0].0.bus.peek_raw(at + 7) | 0x12;
+            if r & 0x0F == 0 {
+                flags &= !0x02;
+            }
+            pokes.push((at + 1, 0x48 + (r >> 8) as u8 % 0x70));
+            pokes.push((at + 2, 0x48 + (r >> 16) as u8 % 0x70));
+            pokes.push((at + 3, (r >> 24) as u8 % 0x30));
+            pokes.push((at + 7, flags));
+            if (r >> 32) & 0x1F == 0 {
+                pokes.push((at, 0x60 + ((r >> 40) & 3) as u8));
+            }
+        }
+        let mut runs = Vec::new();
+        for (room, map) in &rooms {
+            let mut spec = room.clone();
+            for (at, v) in &pokes {
+                spec.bus.poke(*at, *v);
+            }
+            call(&mut spec, address(map, "list_to_draw"), 0, 0, 0);
+            // Every draw_object, in order, by the object it was called for.
+            let (draw, start) = (address(map, "draw_object"), address(map, "draw_in_order"));
+            let sentinel = 0x0000;
+            let top = spec.cpu.sp.wrapping_sub(64);
+            spec.cpu.sp = top;
+            spec.bus.poke(top, 0);
+            spec.bus.poke(top + 1, 0);
+            spec.cpu.pc = start;
+            spec.cpu.iff1 = false;
+            spec.cpu.iff2 = false;
+            let mut order = Vec::new();
+            let mut steps = 0;
+            // Steps back down the chain, which is what is being tested.
+            let back = std::fs::read_to_string(map)
+                .unwrap()
+                .contains("draw_order_back $")
+                .then(|| address(map, "draw_order_back"));
+            while !(spec.cpu.pc == sentinel && spec.cpu.sp == top + 2) {
+                if Some(spec.cpu.pc) == back {
+                    backs += 1;
+                }
+                // Counted when draw_object's first instruction runs. Drawing
+                // a sprite lets interrupts in, and one taken with PC at
+                // draw_object comes back to it: seen there twice, drawn once.
+                let at_draw = spec.cpu.pc == draw;
+                let ix = spec.cpu.ix;
+                spec.step_instruction();
+                if at_draw && spec.cpu.pc == draw + 3 {
+                    order.push(((ix - 0x5B88) / 32) as u8);
+                }
+                steps += 1;
+                assert!(
+                    steps < 20_000_000,
+                    "trial {trial}: draw_in_order did not return in {map}"
+                );
+            }
+            let state: Vec<u8> = (0x5B88..0x6288).map(|a| spec.bus.peek_raw(a)).collect();
+            let passing =
+                map == &BANKED_MAP && spec.bus.peek_raw(address(map, "draw_order_passed")) != 0;
+            runs.push((order, state, passing));
+        }
+        let (old, new) = (&runs[0], &runs[1]);
+        assert_eq!(
+            old.0, new.0,
+            "trial {trial}: the order objects were drawn in (a passing pair changed something: {})",
+            new.2
+        );
+        if let Some(i) = old.1.iter().zip(&new.1).position(|(a, b)| a != b) {
+            panic!(
+                "trial {trial}: ${:04X} is ${:02X} and ${:02X} after drawing",
+                0x5B88 + i,
+                old.1[i],
+                new.1[i]
+            );
+        }
+        objects += old.0.len();
+        passed += u32::from(new.2);
+    }
+    eprintln!(
+        "{objects} objects drawn; {passed} trials where a passing pair changed something; \
+         {backs} steps back down a chain"
+    );
+    assert!(
+        backs > 10_000,
+        "only {backs} steps back: the new path was hardly tried"
+    );
+    assert!(
+        passed > 10 && passed < 2_900,
+        "{passed} of 3,000 trials took the passing path"
+    );
+}
