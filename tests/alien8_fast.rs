@@ -1360,3 +1360,86 @@ fn i_never_points_into_contended_memory() {
         "I was ${seen:02X?}"
     );
 }
+
+// Step 7 of the memory plan keeps a mirrored copy of every sprite in bank 4,
+// made when the game is built rather than by the game, so it has to be what
+// the game's own mirroring makes. For every object type with a sprite, the
+// faster build is asked for the sprite the other way round from how it is
+// stored, which mirrors it in place, and the result is compared with bank 4
+// of the banked build at the same sprite.
+#[test]
+fn the_mirrored_copies_are_what_the_game_would_have_made() {
+    if !have(&[FAST, FAST_MAP, BANKED, BANKED_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let fast = machine(FAST);
+    let banked = machine(BANKED);
+    let (table_f, table_b) = (
+        address(FAST_MAP, "sprite_table"),
+        address(BANKED_MAP, "sprite_table"),
+    );
+    let word =
+        |s: &Spectrum, at: u16| u16::from_le_bytes([s.bus.peek_raw(at), s.bus.peek_raw(at + 1)]);
+    let mut seen = std::collections::BTreeSet::new();
+    for kind in 0..=0x83u16 {
+        let (at_f, at_b) = (
+            word(&fast, table_f + 2 * kind),
+            word(&banked, table_b + 2 * kind),
+        );
+        let header = fast.bus.peek_raw(at_f);
+        if header == 0 || !seen.insert(at_f) {
+            continue;
+        }
+        let size = 2 + 2 * usize::from(header & 0x0F) * usize::from(fast.bus.peek_raw(at_f + 1));
+        let mut spec = fast.clone();
+        // An object of this type wanting the sprite mirrored and the same
+        // way up as it is stored.
+        spec.bus.poke(0x5B88, kind as u8);
+        spec.bus.poke(0x5B88 + 7, (header ^ 0x40) & 0xC0);
+        spec.cpu.ix = 0x5B88;
+        call(&mut spec, address(FAST_MAP, "sprite_for"), 0, 0, 0);
+        let mirrored: Vec<u8> = (0..size as u16)
+            .map(|i| spec.bus.peek_raw(at_f + i))
+            .collect();
+        let copy: Vec<u8> = (0..size as u16)
+            .map(|i| banked.bus.bank_byte(4, at_b + i))
+            .collect();
+        assert_eq!(
+            mirrored[0] & 0x40,
+            (header ^ 0x40) & 0x40,
+            "type ${kind:02X} was not mirrored"
+        );
+        if let Some(i) = mirrored.iter().zip(&copy).position(|(a, b)| a != b) {
+            panic!(
+                "type ${kind:02X}: byte {i} of {size} is ${:02X} mirrored by the game and ${:02X} in bank 4",
+                mirrored[i], copy[i]
+            );
+        }
+    }
+    assert!(seen.len() > 50, "only {} sprites compared", seen.len());
+}
+
+// What Step 7 is for. In the room at frame 90,000 a sixth of the time went
+// on mirroring sprites in place, and with the copies made beforehand that
+// room makes a fifth more passes: measured, 134 in 1,000 frames against the
+// faster build's 112. Where little is mirrored, paging the copy in for every
+// sprite costs about as much as it saves: 193 against 192 in the first room.
+#[test]
+fn the_mirrored_copies_make_the_busiest_room_faster() {
+    if !have(&[
+        FAST,
+        FAST_MAP,
+        BANKED,
+        BANKED_MAP,
+        "assemblies/out/busy90000.sna",
+        "roms/128.rom",
+    ]) {
+        return;
+    }
+    let (fast_first, fast_busy) = passes_in_1000_frames(FAST, FAST_MAP, 1);
+    let (first, busy) = passes_in_1000_frames(BANKED, BANKED_MAP, 1);
+    assert!(
+        u32::from(busy) * 100 >= u32::from(fast_busy) * 115 && u32::from(first) * 100 >= u32::from(fast_first) * 98,
+        "passes in 1,000 frames: {busy} against {fast_busy} in the busy room, {first} against {fast_first} in the first"
+    );
+}
