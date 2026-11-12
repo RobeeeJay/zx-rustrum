@@ -218,6 +218,9 @@ class Assembler:
             starts = []
             self.listing = []
             self.banks = {}
+            # Bytes in a bank, {bank: {address: byte}}, kept apart from the
+            # image so that what run returns is the same as before banks.
+            self.banked = {}
             for number, raw in lines:
                 l = strip_comment(raw)
                 if not l:
@@ -276,12 +279,12 @@ class Assembler:
                 if final and bank is not None and out and pc < 0xC000:
                     raise SystemExit(f"line {number}: ${pc:04X} is in bank {bank}, which is only "
                                      "seen from $C000")
+                into = image if bank is None else self.banked.setdefault(bank, {})
                 for i, b in enumerate(out):
-                    key = (bank, pc + i)
-                    if final and key in image:
+                    if final and pc + i in into:
                         where = f" in bank {bank}" if bank is not None else ""
                         raise SystemExit(f"line {number}: ${pc + i:04X}{where} is written twice")
-                    image[key] = b
+                    into[pc + i] = b
                 pc += len(out)
         return image, starts
 
@@ -328,14 +331,13 @@ def main():
     asm = Assembler(load_table(binary))
     lines = list(enumerate(open(source, encoding="latin-1").read().splitlines(), 1))
     image, starts = asm.run(lines)
-    main_image = {a: b for (bank, a), b in image.items() if bank is None}
-    lo, hi = min(main_image), max(main_image)
-    data = bytes(main_image.get(a, 0) for a in range(lo, hi + 1))
+    lo, hi = min(image), max(image)
+    data = bytes(image.get(a, 0) for a in range(lo, hi + 1))
     open(out, "wb").write(data)
     stem = out[:-4] if out.endswith(".bin") else out
-    banks = sorted({bank for bank, _ in image if bank is not None})
+    banks = sorted(asm.banked)
     for bank in banks:
-        page = bytes(image.get((bank, a), 0) for a in range(0xC000, 0x10000))
+        page = bytes(asm.banked[bank].get(a, 0) for a in range(0xC000, 0x10000))
         open(f"{stem}.bank{bank}.bin", "wb").write(page)
     if out_map:
         with open(out_map, "w") as f:

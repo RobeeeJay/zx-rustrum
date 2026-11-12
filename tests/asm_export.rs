@@ -414,3 +414,43 @@ fn the_python_assembler_puts_code_in_a_bank_of_its_own() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// The scripts in assemblies/ import the assembler and read what run returns
+// as the main image, address by address. Banks came in by making that
+// (bank, address) for every byte, which broke relocate.py with a KeyError
+// at the first address it looked up; the banked bytes are kept beside it.
+#[test]
+fn the_python_assembler_gives_back_the_main_image_by_address_with_banks_beside_it() {
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("no python3; skipping");
+        return;
+    }
+    let script = format!(
+        "import sys; sys.path.insert(0, 'tools'); import z80asm\n\
+         asm = z80asm.Assembler(z80asm.load_table({:?}))\n\
+         src = ['        ORG $8000', '        LD B,$33', '        BANK 3', '        ORG $C000', \
+                '        RET', '        BANK']\n\
+         image, starts = asm.run(list(enumerate(src, 1)))\n\
+         print(sorted(image.items()), sorted((b, sorted(m.items())) for b, m in asm.banked.items()))\n",
+        env!("CARGO_BIN_EXE_mcp")
+    );
+    let run = std::process::Command::new("python3")
+        .arg("-c")
+        .arg(&script)
+        .output()
+        .expect("python3 runs");
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&run.stdout),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        said.trim(),
+        "[(32768, 6), (32769, 51)] [(3, [(49152, 201)])]",
+        "the main image by address, and bank 3's RET beside it"
+    );
+}
