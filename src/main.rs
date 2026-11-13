@@ -267,7 +267,7 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         ui::APP_NAME,
         options,
-        Box::new(move |_cc| {
+        Box::new(move |cc| {
             let mut app = ui::App::with_roms(spec, status, roms, audio_out);
             app.prefs = prefs;
             app.apply_prefs();
@@ -291,6 +291,7 @@ fn main() -> eframe::Result<()> {
                 app.show_tape = true;
             }
             app.audio_error = audio_error;
+            app.check_for_updates(&cc.egui_ctx);
             Ok(Box::new(app))
         }),
     )

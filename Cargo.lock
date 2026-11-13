@@ -8484,4 +8484,5 @@ dependencies = [
  "gilrs",
  "png",
  "rfd",
+ "ureq",
 ]

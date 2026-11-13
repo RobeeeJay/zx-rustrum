@@ -42,6 +42,10 @@ burn-ndarray = { version = "0.21", default-features = false, features = [
     "simd",
     "multi-threads",
 ] }
+# Asks GitHub's releases API whether a newer version is out (src/update.rs).
+# Already in the lock file, as an optional dependency of burn's; TLS through
+# rustls and ring, also there. No gzip: the reply is small.
+ureq = { version = "2.12", default-features = false, features = ["tls"] }
 
 [profile.dev]
 opt-level = 1

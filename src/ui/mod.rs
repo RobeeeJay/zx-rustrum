@@ -655,6 +655,11 @@ pub struct App {
     /// How each debug window's placement is going.
     placed: std::collections::HashMap<&'static str, Placement>,
     pub audio_error: Option<String>,
+    /// A newer release GitHub has, once the launch check has heard back and
+    /// until it is closed, skipped or downloaded.
+    pub update: Option<crate::update::Update>,
+    /// The launch check, while it waits for GitHub.
+    update_check: Option<std::sync::mpsc::Receiver<Option<crate::update::Update>>>,
 }
 
 impl App {
@@ -768,6 +773,8 @@ impl App {
             art: cassette::Art::default(),
             placed: std::collections::HashMap::new(),
             audio_error: None,
+            update: None,
+            update_check: None,
         }
     }
 
@@ -3683,6 +3690,15 @@ impl App {
                     self.set_status(self.starting_up(), false);
                     ui.close();
                 }
+                ui.separator();
+                let mut check = self.checks_for_updates();
+                if ui
+                    .checkbox(&mut check, "Check for updates at launch")
+                    .changed()
+                {
+                    self.prefs.set("check_for_updates", check);
+                    self.prefs.save();
+                }
             });
             theme::divider(ui);
 
@@ -4585,6 +4601,7 @@ impl App {
 
         self.save_window_state_if_settled();
         self.save_notes_if_due();
+        self.hear_about_updates();
         self.ask_for_the_next_frame(&ctx, fading);
     }
 
@@ -4625,6 +4642,67 @@ impl App {
         ctx.request_repaint_after(after);
     }
 
+    /// Ask GitHub, once, whether there is a newer release, unless the setting
+    /// says not to. Called at launch by `main` and nowhere else, so that no
+    /// test reaches the network.
+    pub fn check_for_updates(&mut self, ctx: &egui::Context) {
+        if self.checks_for_updates() {
+            self.update_check = Some(crate::update::check_in_background(ctx.clone()));
+        }
+    }
+
+    /// The setting, on unless it has been turned off.
+    pub fn checks_for_updates(&self) -> bool {
+        self.prefs.get_as("check_for_updates").unwrap_or(true)
+    }
+
+    /// The launch check's answer, when it comes: offered unless it is the
+    /// version somebody chose to skip.
+    fn hear_about_updates(&mut self) {
+        let Some(answer) = self.update_check.as_ref().map(|r| r.try_recv()) else {
+            return;
+        };
+        match answer {
+            Ok(found) => {
+                self.update_check = None;
+                self.offer_update(found);
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => self.update_check = None,
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+        }
+    }
+
+    /// Show a release the check found, unless it is the one skipped.
+    pub fn offer_update(&mut self, found: Option<crate::update::Update>) {
+        let skipped = self.prefs.get("skipped_update").map(str::to_string);
+        self.update = found.filter(|u| Some(&u.version) != skipped.as_ref());
+    }
+
+    /// A strip under the toolbars saying a newer release is out, with the way
+    /// to it, a way to stop hearing about this one, and a way to close it.
+    fn update_notice(&mut self, ui: &mut egui::Ui) {
+        let Some(update) = self.update.clone() else {
+            return;
+        };
+        egui::Panel::top("update").show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(format!("ZX-Rustrum {} is available", update.version));
+                if ui.button("Download").clicked() {
+                    ui.ctx().open_url(egui::OpenUrl::new_tab(&update.url));
+                    self.update = None;
+                }
+                if ui.button("Skip this version").clicked() {
+                    self.prefs.set("skipped_update", &update.version);
+                    self.prefs.save();
+                    self.update = None;
+                }
+                if ui.button("×").on_hover_text("Close").clicked() {
+                    self.update = None;
+                }
+            });
+        });
+    }
+
     /// The main window itself: its toolbars, the picture and the status line.
     fn draw_main(&mut self, ui: &mut egui::Ui) {
         let controls = self.presentation.shows_controls();
@@ -4634,6 +4712,7 @@ impl App {
                 self.machine_row(ui);
                 self.video_row(ui);
             });
+            self.update_notice(ui);
         }
         let ctx = ui.ctx().clone();
         self.disk_prompt(&ctx);

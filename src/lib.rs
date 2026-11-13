@@ -55,6 +55,7 @@ pub mod timeline;
 pub mod tracker;
 pub mod training;
 pub mod ui;
+pub mod update;
 pub mod uspeech;
 pub mod video_out;
 pub mod z80;
