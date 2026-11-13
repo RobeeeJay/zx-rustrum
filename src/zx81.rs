@@ -352,9 +352,9 @@ impl Zx81Bus {
     /// off — which is how the ROM times the picture.
     fn keyboard(&self, port: u16, tape: bool) -> u8 {
         let mut result = 0x1f;
-        for row in 0..8 {
+        for (row, keys) in self.keys.iter().enumerate() {
             if port & (1 << (8 + row)) == 0 {
-                result &= self.keys[row] & 0x1f;
+                result &= keys & 0x1f;
             }
         }
         // Bit 6 is the 50/60 Hz jumper, high for a 50 Hz machine. Bit 7 is the

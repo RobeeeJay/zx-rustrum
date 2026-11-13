@@ -3782,10 +3782,10 @@ impl App {
         }
         let mut slot = self.quick_slot;
         theme::dropdown(ui, 34.0, slot.to_string(), |ui| {
-            for n in 0..10 {
+            for (n, kept) in self.quick.iter().enumerate() {
                 // A filled slot says so, so the one with something in it can
                 // be found without loading each in turn.
-                let label = if self.quick[n].is_some() {
+                let label = if kept.is_some() {
                     format!("{n} •")
                 } else {
                     n.to_string()
