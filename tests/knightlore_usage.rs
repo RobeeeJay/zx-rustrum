@@ -212,5 +212,9 @@ fn where_nothing_is_used() {
         .collect();
     std::fs::write("assemblies/knight-lore/out/unused.txt", &text).unwrap();
     eprint!("{text}");
-    assert!(runs.iter().any(|(a, b)| b - a >= 0x400), "no run of 1K unused");
+    // A measurement, so it fails only if nothing was counted: the sprite table
+    // is read whenever anything is drawn. Knight Lore's longest run is 16
+    // bytes, which is the finding (assemblies/knight-lore/plan.md, stage 2).
+    let sprites = spec.bus.phys_index(0x7112);
+    assert!(t.read_count[sprites] > 0, "the sprite table was never read: reads were not counted");
 }
