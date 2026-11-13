@@ -172,3 +172,45 @@ fn the_code_moved_on_plays_the_recording_as_the_original_does() {
     }
     eprintln!("{compared} screens the same");
 }
+
+// The AY build needs room for its driver and a page for its pitch table,
+// which has to be memory the game never uses: zero at the recording's first
+// frame, and never read, written or run in all of it. Written to
+// assemblies/knight-lore/out/unused.txt, longest first.
+#[test]
+#[ignore]
+fn where_nothing_is_used() {
+    if std::fs::metadata(RECORDING).is_err() || std::fs::metadata("roms/48.rom").is_err() {
+        eprintln!("no recording or ROM; skipping");
+        return;
+    }
+    let recording = zx_rustrum::rzx::parse(&std::fs::read(RECORDING).unwrap()).unwrap();
+    let snap = recording.snapshot.clone().unwrap();
+    let mut first = Spectrum::with_model(Model::Spectrum48);
+    zx_rustrum::snapshot::load_bytes(&mut first, &snap.extension, &snap.data).unwrap();
+    let (spec, frames) = replay();
+    assert_eq!(frames, recording.len(), "the recording came adrift at {frames}");
+    let t = &spec.bus.tracker;
+    let unused = |a: u16| {
+        let i = spec.bus.phys_index(a);
+        first.bus.peek_raw(a) == 0 && t.read_count[i] == 0 && t.write_count[i] == 0 && !t.executed[i]
+    };
+    let mut runs: Vec<(u16, u16)> = Vec::new();
+    for a in 0x5B00u16..=0xFFFF {
+        if unused(a) {
+            match runs.last_mut() {
+                Some(r) if r.1 == a - 1 => r.1 = a,
+                _ => runs.push((a, a)),
+            }
+        }
+    }
+    runs.sort_by_key(|r| std::cmp::Reverse(r.1 - r.0));
+    let text: String = runs
+        .iter()
+        .take(20)
+        .map(|(a, b)| format!("${a:04X}-${b:04X} {}\n", b - a + 1))
+        .collect();
+    std::fs::write("assemblies/knight-lore/out/unused.txt", &text).unwrap();
+    eprint!("{text}");
+    assert!(runs.iter().any(|(a, b)| b - a >= 0x400), "no run of 1K unused");
+}

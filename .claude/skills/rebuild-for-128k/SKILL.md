@@ -137,6 +137,14 @@ and note in both builds and compares R and every register. Also take out any
 `OUT ($FD)` (the AY's port on a 128K) the keyboard read makes. Check: the
 recording still plays.
 
+**If the 48K game is full**, there is nowhere for the driver: measure the
+unused memory over the whole recording first (zero at the start, never read,
+written or run). Knight Lore's longest such run was 16 bytes. Then compare the
+game's sound routines with a game whose stage 2 was done; if they are the same
+instruction for instruction, skip this stage and say why, make room first
+(stage 6's room bank, checked pass for pass against stage 1), and put the AY
+in free of the beeper from the start.
+
 ### 3. The AY, free of the beeper's waiting
 
 `ay_free.py`: sounds go into a queue and return; an IM 2 interrupt takes a
