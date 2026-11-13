@@ -2232,6 +2232,17 @@ fn the_tape_loads_at_the_roms_own_speed() {
 }
 
 fn starts_as_the_snapshot_does(tape: Spectrum) {
+    // The original's loading screen, when it has been kept, is what is on
+    // the screen as the game starts, untouched by anything printed.
+    if let Ok(kept) = std::fs::read(LOADING_SCREEN) {
+        let shown: Vec<u8> = (0x4000..0x5B00u16).map(|a| tape.bus.peek_raw(a)).collect();
+        if let Some(i) = shown.iter().zip(&kept).position(|(a, b)| a != b) {
+            panic!(
+                "the loading screen: byte {i:#06X} is ${:02X} and the original's ${:02X}",
+                shown[i], kept[i]
+            );
+        }
+    }
     let snap = machine(PLAYED_START);
     let differs = |what: &str, a: &[u8], b: &[u8]| {
         if let Some(i) = a.iter().zip(b).position(|(x, y)| x != y) {
@@ -2286,4 +2297,79 @@ fn starts_as_the_snapshot_does(tape: Spectrum) {
         "the snapshot drew nothing in 400 frames"
     );
     differs("the menu after 400 frames", &screen(&tape), &screen(&snap));
+}
+
+const ORIGINAL_TAPE: &str = "tapes/Alien 8 (1985)(Ultimate Play The Game).zip";
+const LOADING_SCREEN: &str = "assemblies/Alien 8 loading screen.scr";
+
+// The rebuilt game's tape shows the original's loading screen, which can't be
+// lifted off the original tape: it is loaded by Speedlock 1, in turbo blocks
+// of its own. So the original is loaded on a 48K at the tape's speed, and the
+// screen kept is the one that stood still while the tape's last blocks went
+// in, as it was the frame before the game first drew over it. Written for
+// assemblies/tap.py, and run by assemblies/fast.sh.
+#[test]
+#[ignore]
+fn keep_the_original_loading_screen() {
+    if !have(&[ORIGINAL_TAPE, "roms/48.rom"]) {
+        return;
+    }
+    let zip = std::fs::read(ORIGINAL_TAPE).unwrap();
+    let (name, bytes) = zx_rustrum::zip::first_with_extension(&zip, &["tzx", "tap"]).unwrap();
+    let mut tape = zx_rustrum::tape::Tape::from_bytes(&name, &bytes).unwrap();
+    let mut spec = Spectrum::with_model(Model::Spectrum48);
+    spec.load_rom(&std::fs::read("roms/48.rom").unwrap());
+    let t = spec.bus.model.frame_t();
+    for _ in 0..150 {
+        spec.run(t);
+    }
+    tape.play(spec.bus.total_t());
+    spec.bus.tape = Some(tape);
+    // LOAD "": J, symbol shift and P twice, ENTER.
+    for keys in [
+        &[(6usize, 3u8)][..],
+        &[(7, 1), (5, 0)],
+        &[(7, 1), (5, 0)],
+        &[(6, 0)],
+    ] {
+        for (row, bit) in keys {
+            key(&mut spec, *row, *bit, true);
+        }
+        for _ in 0..5 {
+            spec.run(t);
+        }
+        for (row, bit) in keys {
+            key(&mut spec, *row, *bit, false);
+        }
+        for _ in 0..5 {
+            spec.run(t);
+        }
+    }
+    let screen = |s: &Spectrum| {
+        (0x4000..0x5B00u16)
+            .map(|a| s.bus.peek_raw(a))
+            .collect::<Vec<u8>>()
+    };
+    let block = |s: &Spectrum| s.bus.tape.as_ref().map_or(0, |t| t.block);
+    // The screen goes in as blocks 130 onwards; the rest of the game after it.
+    let (mut last, mut quiet_since, mut quiet_from) = (screen(&spec), 0u64, 0usize);
+    for _ in 0..30_000 {
+        spec.run(t);
+        let now = screen(&spec);
+        if now != last {
+            let quiet = spec.bus.frame - quiet_since;
+            if quiet > 200 && quiet_from >= 130 && last[0x1800..].iter().any(|b| *b != 0) {
+                std::fs::write(LOADING_SCREEN, &last).unwrap();
+                eprintln!(
+                    "the screen of frame {}, still for {quiet} frames",
+                    spec.bus.frame - 1
+                );
+                return;
+            }
+            quiet_since = spec.bus.frame;
+            quiet_from = block(&spec);
+        }
+        last = now;
+    }
+    panic!("the loading screen never stood still before the game drew over it");
 }
