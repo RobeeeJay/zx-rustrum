@@ -109,6 +109,24 @@ screens.
 buffers found by their high byte can't move with a label, and need their pages
 written in as `name/256` when they do.
 
+**Prove it can move** with a test variant that moves every byte of code by an
+odd amount (16, not 256, so page-addressed tables show too) and plays the
+recording. Two limits, both found on Knight Lore:
+
+- **The random number may read memory.** Ultimate's end of pass adds the byte at
+  the address its pass count makes, so the game reads its own memory a byte a
+  pass, and once the count reaches a byte the move changed (code, or a variable
+  holding a pointer into it) the game goes another way. Find that frame by
+  recording the byte the count reads in both builds, and hold the variant to the
+  recording only until then.
+- **The recording only checks what it runs.** A stale address in code the
+  recording never reaches (the menu, drawn before it starts) changes nothing it
+  sees. Check a mutation in code that runs every pass fails the test, and say
+  which code the recording does not cover.
+
+A game may also have **no dead code** (Knight Lore had none): read every
+unreached stretch before deciding, and say so.
+
 ### 2. The AY, in step with the beeper
 
 `ay.py`: the beeper's `OUT ($FE)` loops become AY writes. The recording counts
