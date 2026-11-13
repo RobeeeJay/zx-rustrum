@@ -340,7 +340,9 @@ def main():
         page = bytes(asm.banked[bank].get(a, 0) for a in range(0xC000, 0x10000))
         open(f"{stem}.bank{bank}.bin", "wb").write(page)
     if out_map:
-        with open(out_map, "w") as f:
+        # "\n" whatever the platform: Windows' text mode would end each line
+        # with "\r\n", and a map is read back by programs that split on "\n".
+        with open(out_map, "w", newline="\n") as f:
             for name, addr in sorted(asm.names.items(), key=lambda kv: (kv[1], kv[0])):
                 bank = asm.banks.get(name)
                 f.write(f"{name} ${addr:04X}" + (f" bank{bank}" if bank is not None else "") + "\n")
