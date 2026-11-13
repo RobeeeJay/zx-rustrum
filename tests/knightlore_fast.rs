@@ -80,10 +80,23 @@ fn start_a_game(spec: &mut Spectrum) {
 /// Q, P, A and O in turn.
 const WALK: [(usize, u8); 4] = [(2, 0), (5, 0), (1, 0), (5, 1)];
 
-/// The screen, the variables and the forty objects.
+/// Where main_loop puts the stack. Below it, $5B00-$5B9F, is nothing but
+/// the stack: no instruction names an address there. What is left there
+/// after a call returns is return addresses, which differ between builds
+/// that put code in different places, and nothing reads below SP, so it is
+/// left out.
+const STACK_TOP: u16 = 0x5BA0;
+
+/// The screen, the variables and the forty objects, less the stack.
 fn comparable(spec: &Spectrum) -> Vec<u8> {
     (0x4000..OBJECTS_END)
-        .map(|a| spec.bus.peek_raw(a))
+        .map(|a| {
+            if (0x5B00..STACK_TOP).contains(&a) {
+                0
+            } else {
+                spec.bus.peek_raw(a)
+            }
+        })
         .collect()
 }
 
@@ -168,5 +181,117 @@ fn reading_the_keyboard_leaves_the_paging_alone() {
         (spec.bus.page_reg, spec.bus.paging_locked),
         (0x10, false),
         "$7FFD after 300 passes"
+    );
+}
+
+const BANKED: &str = "assemblies/knight-lore/out/banked fixed.szx";
+const BANKED_MAP: &str = "assemblies/knight-lore/out/banked fixed.map";
+
+/// A machine in a game, stopped at the end of pass FIRST_PASS.
+fn at_first_pass(snap: &str, map: &str) -> Spectrum {
+    let mut spec = machine(snap);
+    start_a_game(&mut spec);
+    let end_of_pass = address(map, "end_of_pass");
+    for _ in 0..500_000_000u64 {
+        if spec.cpu.pc == end_of_pass && passes(&spec) >= FIRST_PASS {
+            return spec;
+        }
+        spec.step_instruction();
+    }
+    panic!("{snap} never reached pass {FIRST_PASS}");
+}
+
+/// Calls `at` and runs until it returns, putting SP, PC and the interrupt
+/// state back afterwards.
+fn call(spec: &mut Spectrum, at: u16) {
+    let (was, pc, iff1, iff2) = (spec.cpu.sp, spec.cpu.pc, spec.cpu.iff1, spec.cpu.iff2);
+    let top = was.wrapping_sub(16);
+    spec.cpu.sp = top;
+    spec.bus.poke(top, 0);
+    spec.bus.poke(top + 1, 0);
+    spec.cpu.pc = at;
+    spec.cpu.iff1 = false;
+    spec.cpu.iff2 = false;
+    for _ in 0..50_000_000 {
+        spec.step_instruction();
+        if spec.cpu.pc == 0 && spec.cpu.sp == top + 2 {
+            (spec.cpu.sp, spec.cpu.pc, spec.cpu.iff1, spec.cpu.iff2) = (was, pc, iff1, iff2);
+            return;
+        }
+    }
+    panic!("${at:04X} did not return");
+}
+
+// Step 1 of the 128K banks moves the room data and build_room_objects, its
+// only reader, to bank 3, behind a stub that pages it in and out. Walking
+// never leaves the first room, but every pass draws it and every object in
+// it moves, so the banked build has to play the same game as stage 1.
+#[test]
+fn the_room_bank_plays_the_same_game_pass_for_pass() {
+    if !have(&[STAGE1, STAGE1_MAP, BANKED, BANKED_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let stage1 = play_by_pass(STAGE1, STAGE1_MAP, 300);
+    let banked = play_by_pass(BANKED, BANKED_MAP, 300);
+    assert_eq!(
+        first_difference(&stage1, &banked),
+        None,
+        "walking from the start of a game"
+    );
+}
+
+/// What building a room leaves: the variables and objects, the charm list,
+/// and the draw buffer.
+fn after_building(spec: &Spectrum) -> Vec<u8> {
+    (STACK_TOP..0x6248u16)
+        .chain(0x6FF2..0x7112)
+        .chain(0xD8F3..0xF0F3)
+        .map(|a| spec.bus.peek_raw(a))
+        .collect()
+}
+
+// So every room number is built in both, from the same game, through the
+// stub: the pieces and objects come out of the moved data through its moved
+// pointer words, and a word left pointing at $6xxx would read the freed
+// space. A number that is no room clears the objects, and is compared too.
+#[test]
+fn every_room_is_built_the_same_from_bank_3() {
+    if !have(&[STAGE1, STAGE1_MAP, BANKED, BANKED_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let starts = [
+        at_first_pass(STAGE1, STAGE1_MAP),
+        at_first_pass(BANKED, BANKED_MAP),
+    ];
+    assert_eq!(
+        after_building(&starts[0]),
+        after_building(&starts[1]),
+        "the two games were not in the same state to begin with"
+    );
+    let mut different = 0;
+    for room in 0..=255u8 {
+        let built: Vec<Vec<u8>> = starts
+            .iter()
+            .zip([STAGE1_MAP, BANKED_MAP])
+            .map(|(start, map)| {
+                let mut spec = start.clone();
+                spec.bus.poke(0x5C10, room);
+                spec.cpu.ix = 0x5C08;
+                call(&mut spec, address(map, "build_room"));
+                assert_eq!(spec.bus.page_reg, 0x10, "bank 0 back after room {room}");
+                after_building(&spec)
+            })
+            .collect();
+        if let Some(i) = built[0].iter().zip(&built[1]).position(|(a, b)| a != b) {
+            panic!(
+                "room {room}: byte {i} is ${:02X} and ${:02X}",
+                built[0][i], built[1][i]
+            );
+        }
+        different += usize::from(built[0] != after_building(&starts[0]));
+    }
+    assert!(
+        different > 100,
+        "only {different} rooms built anything different"
     );
 }

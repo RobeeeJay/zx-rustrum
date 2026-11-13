@@ -12,6 +12,11 @@ use zx_rustrum::tracker::Tracker;
 
 const RECORDING: &str = "recordings/KnightLore.rzx";
 
+thread_local! {
+    /// Whether replay turns the observer on, which costs a branch an access.
+    static OBSERVE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// Plays the original from its recording with a fresh tracker, frame by
 /// frame, until the recording ends or comes adrift (reads input it never
 /// recorded, or leaves some unread), and says how far it got.
@@ -38,6 +43,7 @@ fn replay_from(start: Option<&str>, each: &mut dyn FnMut(&Spectrum, usize)) -> (
     }
     spec.bus.playback = Some(Playback::default());
     spec.bus.tracker = Tracker::new();
+    spec.bus.observer.enabled = OBSERVE.with(|o| o.get());
     let mut carry = 0;
     for frame in 0..recording.len() {
         if let Some(snapshot) = recording.snapshot_before(frame) {
@@ -189,11 +195,18 @@ fn where_nothing_is_used() {
     let mut first = Spectrum::with_model(Model::Spectrum48);
     zx_rustrum::snapshot::load_bytes(&mut first, &snap.extension, &snap.data).unwrap();
     let (spec, frames) = replay();
-    assert_eq!(frames, recording.len(), "the recording came adrift at {frames}");
+    assert_eq!(
+        frames,
+        recording.len(),
+        "the recording came adrift at {frames}"
+    );
     let t = &spec.bus.tracker;
     let unused = |a: u16| {
         let i = spec.bus.phys_index(a);
-        first.bus.peek_raw(a) == 0 && t.read_count[i] == 0 && t.write_count[i] == 0 && !t.executed[i]
+        first.bus.peek_raw(a) == 0
+            && t.read_count[i] == 0
+            && t.write_count[i] == 0
+            && !t.executed[i]
     };
     let mut runs: Vec<(u16, u16)> = Vec::new();
     for a in 0x5B00u16..=0xFFFF {
@@ -216,5 +229,81 @@ fn where_nothing_is_used() {
     // is read whenever anything is drawn. Knight Lore's longest run is 16
     // bytes, which is the finding (assemblies/knight-lore/plan.md, stage 2).
     let sprites = spec.bus.phys_index(0x7112);
-    assert!(t.read_count[sprites] > 0, "the sprite table was never read: reads were not counted");
+    assert!(
+        t.read_count[sprites] > 0,
+        "the sprite table was never read: reads were not counted"
+    );
+}
+
+// Stage 6's first step moves what is only read to build a room into bank 3,
+// so it needs who reads the room data ($6248-$7111: kinds, rooms, object
+// kinds, background pieces and the charm list) and what of it is written in
+// play. Written to assemblies/knight-lore/out/room-readers.txt.
+#[test]
+#[ignore]
+fn who_reads_the_room_data() {
+    if std::fs::metadata(RECORDING).is_err() || std::fs::metadata("roms/48.rom").is_err() {
+        eprintln!("no recording or ROM; skipping");
+        return;
+    }
+    let map = std::fs::read_to_string("assemblies/knight-lore/out/original.map").unwrap();
+    let mut names: Vec<(u16, String)> = map
+        .lines()
+        .filter_map(|l| {
+            let (n, a) = l.split_once(" $")?;
+            Some((
+                u16::from_str_radix(a.split_whitespace().next()?, 16).ok()?,
+                n.to_string(),
+            ))
+        })
+        .collect();
+    names.sort();
+    let name = |a: u16| {
+        let i = names.partition_point(|(x, _)| *x <= a);
+        if i == 0 {
+            format!("${a:04X}")
+        } else {
+            let (x, n) = &names[i - 1];
+            if *x == a {
+                n.clone()
+            } else {
+                format!("{n}+{}", a - x)
+            }
+        }
+    };
+    OBSERVE.with(|o| o.set(true));
+    let (spec, frames) = replay();
+    OBSERVE.with(|o| o.set(false));
+    let mut out = format!("{frames} frames\nreaders of each page:\n");
+    for page in 0x62u8..=0x71 {
+        let who: Vec<String> = spec
+            .bus
+            .observer
+            .readers_of(page)
+            .into_iter()
+            .map(name)
+            .collect();
+        out.push_str(&format!("  ${page:02X}xx {}\n", who.join(", ")));
+    }
+    out.push_str("written in play:\n");
+    let t = &spec.bus.tracker;
+    let mut run: Option<(u16, u16)> = None;
+    for a in 0x6248u16..0x7112 {
+        let written = t.write_count[spec.bus.phys_index(a)] > 0;
+        match (written, run) {
+            (true, Some((s, e))) if e == a - 1 => run = Some((s, a)),
+            (true, _) => {
+                if let Some((s, e)) = run {
+                    out.push_str(&format!("  {}..{}\n", name(s), name(e)));
+                }
+                run = Some((a, a));
+            }
+            _ => {}
+        }
+    }
+    if let Some((s, e)) = run {
+        out.push_str(&format!("  {}..{}\n", name(s), name(e)));
+    }
+    std::fs::write("assemblies/knight-lore/out/room-readers.txt", &out).unwrap();
+    eprint!("{out}");
 }

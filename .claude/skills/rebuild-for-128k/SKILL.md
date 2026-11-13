@@ -60,6 +60,10 @@ These are the habits that caught nearly every mistake. Set them up first.
   into moved code (a draw list's position, the room's data) made an offset, and
   anything written before it is read each pass blanked, with the reason in a
   comment.
+- **Leave the stack out of what is compared** if it sits inside it (Knight
+  Lore's is the printer buffer below $5BA0): return addresses left below SP
+  differ as soon as code moves. Check no instruction names an address there
+  first, and measure how deep it goes.
 - **Compare from the same pass, not the same frame.** A faster build has been
   round more often by any frame. Count passes; start the comparison from a fixed
   pass number, and make sure setting up a game stops **before** it. Alien 8's
