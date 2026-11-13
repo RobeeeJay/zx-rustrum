@@ -377,7 +377,8 @@ impl Fdc {
     /// Fade the map, once a frame. What was touched a moment ago is bright and
     /// what was touched a while back is dim, which is what makes a load look
     /// like a load rather than like a list of sectors.
-    pub fn fade(&mut self) {
+    /// Whether any sector is still lit, for a paused window to repaint for.
+    pub fn fade(&mut self) -> bool {
         const STEP: u8 = 6;
         for heat in [&mut self.reads, &mut self.writes] {
             heat.retain(|_, v| {
@@ -385,6 +386,7 @@ impl Fdc {
                 *v > 0
             });
         }
+        !self.reads.is_empty() || !self.writes.is_empty()
     }
 
     /// Where the head is on a drive, which is the track the next read comes

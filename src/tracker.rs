@@ -156,10 +156,13 @@ impl Tracker {
     }
 
     /// Fade every heat map one step. Called once per rendered frame.
-    pub fn fade(&mut self) {
-        fade_buf(&mut self.read_heat, self.fade_read);
-        fade_buf(&mut self.write_heat, self.fade_write);
-        fade_buf(&mut self.exec_heat, self.fade_exec);
+    /// Whether any heat is left to fade, which is what a paused window keeps
+    /// repainting for.
+    pub fn fade(&mut self) -> bool {
+        let read = fade_buf(&mut self.read_heat, self.fade_read);
+        let write = fade_buf(&mut self.write_heat, self.fade_write);
+        let exec = fade_buf(&mut self.exec_heat, self.fade_exec);
+        read || write || exec
     }
 
     /// Re-evaluate the back-buffer guess. Called once per rendered frame.
@@ -274,11 +277,16 @@ impl Tracker {
     }
 }
 
-fn fade_buf(buf: &mut [u8; PHYS_LEN], step: u8) {
+/// Whether anything is still lit and will go on fading: at a step of 0 nothing
+/// changes, however much is lit.
+fn fade_buf(buf: &mut [u8; PHYS_LEN], step: u8) -> bool {
     if step == 0 {
-        return;
+        return false;
     }
+    let mut lit = 0;
     for v in buf.iter_mut() {
         *v = v.saturating_sub(step);
+        lit |= *v;
     }
+    lit != 0
 }

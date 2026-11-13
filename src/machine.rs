@@ -1380,10 +1380,13 @@ impl SpectrumBus {
         self.observer.end_frame();
     }
 
-    pub fn frame_visuals(&mut self) {
-        self.tracker.fade();
+    /// The heat maps and the disk's map faded a frame's worth: whether either
+    /// still has something lit.
+    pub fn frame_visuals(&mut self) -> bool {
+        let heat = self.tracker.fade();
         self.tracker.tick_detector();
-        self.fdc.fade();
+        let disk = self.fdc.fade();
+        heat || disk
     }
 }
 

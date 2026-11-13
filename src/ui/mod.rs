@@ -488,6 +488,11 @@ pub struct App {
     pub presentation: present::Presentation,
     fill_scale: f32,
     os_fullscreen_seen: bool,
+    /// Until when, by egui's clock, a paused machine's window goes on
+    /// repainting every frame: a moment after anything happens.
+    awake_until: f64,
+    /// Whether the machine was running at the end of the last frame.
+    was_running: bool,
     chord_key_held: bool,
     pub show_training: bool,
     pub training: trainwin::Training,
@@ -693,6 +698,8 @@ impl App {
             presentation: present::Presentation::default(),
             fill_scale: 1.0,
             os_fullscreen_seen: false,
+            awake_until: 0.0,
+            was_running: false,
             chord_key_held: false,
             show_training: false,
             training: trainwin::Training::default(),
@@ -4551,13 +4558,13 @@ impl App {
             Some(zx) => zx.bus.tape_tick(),
             None => self.spec.bus.tape_tick(),
         }
-        match &mut self.zx81 {
+        let fading = match &mut self.zx81 {
             // The back-buffer detector watches the Spectrum's display file, so
             // there is nothing for it to do here; the heat maps still have to
             // fade, or every byte the ROM has ever touched stays lit.
             Some(zx) => zx.bus.tracker.fade(),
             None => self.spec.bus.frame_visuals(),
-        }
+        };
         self.draw_screen_texture(&ctx);
 
         // The debug windows are rendered before this viewport's own panels:
@@ -4578,7 +4585,44 @@ impl App {
 
         self.save_window_state_if_settled();
         self.save_notes_if_due();
-        ctx.request_repaint();
+        self.ask_for_the_next_frame(&ctx, fading);
+    }
+
+    /// Every frame while the machine runs. Paused, the picture stands still,
+    /// and repainting it at the display's rate anyway cost 12% to 19% of a core
+    /// for nothing: so only for a moment after anything happens, while
+    /// something is still fading or settling, and otherwise when something is
+    /// due.
+    fn ask_for_the_next_frame(&mut self, ctx: &egui::Context, fading: bool) {
+        const AWAKE: f64 = 1.0;
+        let running = self.running;
+        let stopped = std::mem::replace(&mut self.was_running, running) && !running;
+        if running {
+            ctx.request_repaint();
+            return;
+        }
+        let now = ctx.input(|i| i.time);
+        if stopped || ctx.input(|i| !i.events.is_empty()) {
+            self.awake_until = now + AWAKE;
+        }
+        let settling = self.placed.values().any(|p| !p.settled)
+            || (self.presentation == present::Presentation::FullScreen && !self.os_fullscreen_seen);
+        if now < self.awake_until || fading || settling {
+            ctx.request_repaint();
+            return;
+        }
+        // A binding waiting for a press, or the Input window showing what the
+        // pads are doing: the pads are only read in a frame.
+        let polling = self.joystick_binding.is_some() || (self.show_input && self.pads.count > 0);
+        let after = if polling {
+            std::time::Duration::from_millis(30)
+        } else if self.notes.is_dirty() {
+            std::time::Duration::from_millis(500)
+        } else {
+            // The layout is saved once it has been still for two seconds.
+            std::time::Duration::from_secs(2)
+        };
+        ctx.request_repaint_after(after);
     }
 
     /// The main window itself: its toolbars, the picture and the status line.
