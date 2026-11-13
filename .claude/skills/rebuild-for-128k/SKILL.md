@@ -134,8 +134,13 @@ opcode fetches between key reads, so the AY build must make **exactly** the
 fetches the beeper build made: each routine that writes the AY gives back what
 the writes cost out of the wait that follows. `ay_check.py` runs every sound
 and note in both builds and compares R and every register. Also take out any
-`OUT ($FD)` (the AY's port on a 128K) the keyboard read makes. Check: the
-recording still plays.
+`OUT ($FD)` the keyboard read makes. It is not only the AY's port: with the key
+row as the port's high byte, a row with bit 7 clear ($7EFD, $00FD) is the 128K's
+**paging port**, and $7E pages bank 6 over the game's code and locks the paging.
+Knight Lore, started on a 128K, made one pass and ran off the end of memory for
+it. Make it a NOP (one fetch, the same as the OUT) in **every** 128K build from
+the first, test variants included, and test that $7FFD is unchanged after a
+game. Check: the recording still plays.
 
 **If the 48K game is full**, there is nowhere for the driver: measure the
 unused memory over the whole recording first (zero at the start, never read,
