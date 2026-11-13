@@ -786,11 +786,12 @@ fn passes_in_1000_frames(snap: &str, map: &str, turbo: u32) -> (u16, u16) {
 // The game's only pacing was a busy-wait, so the emulator's CPU turbo made it
 // run away: at 4x the faster build goes round 785 times in 1,000 frames of the
 // first room. The paced build waits for the interrupt to hold every pass to
-// five frames, about the original's quickest, in any room. Before interrupts
-// were let in during sprites it held 179, not 200: the frames it counted
-// were short by the ones lost.
+// four frames, in any room: five at first, about the original's quickest,
+// and four once the banked build's busy rooms were being held to five as
+// well. Before interrupts were let in during sprites it held 179 passes in
+// 1,000 frames, not 200: the frames it counted were short by the ones lost.
 #[test]
-fn the_paced_build_holds_five_frames_a_pass_at_turbo() {
+fn the_paced_build_holds_four_frames_a_pass_at_turbo() {
     if !have(&[
         PACED,
         PACED_MAP,
@@ -801,18 +802,18 @@ fn the_paced_build_holds_five_frames_a_pass_at_turbo() {
     }
     let (room_1, busy) = passes_in_1000_frames(PACED, PACED_MAP, 4);
     assert!(
-        (195..=200).contains(&room_1) && (195..=200).contains(&busy),
+        (245..=250).contains(&room_1) && (245..=250).contains(&busy),
         "at 4x, {room_1} passes in 1,000 frames of the first room and {busy} of a busy one; \
-         a pass every five frames is 200"
+         a pass every four frames is 250"
     );
 }
 
 // The build that is played is the paced one with Step 2's banking on top,
 // and R left in its random numbers, so no other test runs it. Starting a
 // game goes through bank 3, so a banked build that was wrong would not get
-// as far as a pass, let alone hold five frames each.
+// as far as a pass, let alone hold four frames each.
 #[test]
-fn the_banked_build_that_is_played_holds_five_frames_a_pass_too() {
+fn the_banked_build_that_is_played_holds_four_frames_a_pass_too() {
     let (snap, map) = (
         "assemblies/Alien 8 AY banked start.szx",
         "assemblies/out/Alien 8 AY banked.map",
@@ -822,7 +823,7 @@ fn the_banked_build_that_is_played_holds_five_frames_a_pass_too() {
     }
     let (room_1, busy) = passes_in_1000_frames(snap, map, 4);
     assert!(
-        (195..=200).contains(&room_1) && (195..=200).contains(&busy),
+        (245..=250).contains(&room_1) && (245..=250).contains(&busy),
         "at 4x, {room_1} passes in 1,000 frames of the first room and {busy} of a busy one"
     );
 }
@@ -2005,12 +2006,13 @@ fn fx_tick(spec: &mut Spectrum, map: &str, block: &str) {
 
 // Step 13 of the memory plan moves the sound effects off channel A, where
 // they were blips the AY's envelope faded out in a fraction of a frame, to
-// channels of their own: the robot's on B, everything else's on C, each held
-// at full volume for as long as it is queued and then let fall by 2 a frame.
-// A beep of 64 clicks at pitch $80 is 64 x 53 = 3,392 units long, and a frame
-// takes 1,108 off it: three frames leave 68, and the fourth finds it gone.
-// So it has to be heard at full volume for three frames and then fall to
-// nothing over eight, on
+// channels of their own: the robot's on B, everything else's on C, each
+// rising from 11 by 2 a frame to full for as long as it is queued, so that it
+// doesn't start with a click, and then let fall by 2 a frame. A beep of 64
+// clicks at pitch $80 is 64 x 53 = 3,392 units long, and a frame takes 1,108
+// off it: three frames leave 68, and the fourth finds it gone. So it starts
+// at 11, is at 13 and then full while it is held, and falls to nothing over
+// eight frames once it has gone, on
 // the robot's channel when the robot makes it and the world's otherwise,
 // with the tune's channel A left alone and the other effects channel too.
 #[test]
@@ -2057,7 +2059,7 @@ fn an_effect_is_held_on_its_own_channel_and_then_let_go() {
                 u16::from_le_bytes([regs[tone_reg], regs[tone_reg + 1]]),
                 regs[volume]
             ),
-            (tone, 15),
+            (tone, 11),
             "{block}: the beep's tone and volume as it starts"
         );
         assert_eq!(
@@ -2076,8 +2078,8 @@ fn an_effect_is_held_on_its_own_channel_and_then_let_go() {
         }
         assert_eq!(
             levels,
-            [15, 15, 15, 13, 11, 9, 7, 5, 3, 1, 0, 0],
-            "{block}: the volume, a frame at a time, as the beep is held and let go"
+            [13, 15, 15, 13, 11, 9, 7, 5, 3, 1, 0, 0],
+            "{block}: the volume, a frame at a time, as the beep rises, is held and is let go"
         );
     }
     // And it is the interrupt that does it: the game left to run, with the
@@ -2098,8 +2100,13 @@ fn an_effect_is_held_on_its_own_channel_and_then_let_go() {
         spec.run(t);
         levels.push(spec.bus.audio.ay.regs[9]);
     }
+    // Up to full, then only down, to nothing.
+    let peak = levels.iter().position(|v| *v == 15);
     assert!(
-        levels[0] == 15 && levels[19] == 0 && levels.windows(2).all(|w| w[1] <= w[0]),
+        peak.is_some_and(|p| levels[..=p].windows(2).all(|w| w[1] >= w[0])
+            && levels[p..].windows(2).all(|w| w[1] <= w[0]))
+            && levels[0] < 15
+            && levels[19] == 0,
         "channel B a frame at a time with the game running: {levels:?}"
     );
 }
