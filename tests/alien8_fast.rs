@@ -2152,3 +2152,138 @@ fn a_later_pass_cuts_off_only_its_own_channel() {
         "the robot's own later beep replaces its first"
     );
 }
+
+const TAPE: &str = "assemblies/Alien 8 AY banked.tap";
+const PLAYED_START: &str = "assemblies/Alien 8 AY banked start.szx";
+
+/// The blocks of a .tap as they are on it: flag, data, checksum each.
+fn tap_blocks(tap: &[u8]) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut at = 0;
+    while at + 2 <= tap.len() {
+        let n = usize::from(u16::from_le_bytes([tap[at], tap[at + 1]]));
+        out.push(tap[at + 2..at + 2 + n].to_vec());
+        at += 2 + n;
+    }
+    out
+}
+
+/// A 128K that has loaded `TAPE` through its Tape Loader, stopped as the
+/// loader jumps to game_start: with each block handed to the ROM's LD-BYTES
+/// whole, as the emulator's fastload does, or `played` at the ROM's speed.
+fn loaded_from_tape(played: bool) -> Spectrum {
+    let mut spec = Spectrum::with_model(Model::Spectrum128);
+    spec.load_rom(&std::fs::read("roms/128.rom").unwrap());
+    let mut tape = zx_rustrum::tape::Tape::from_bytes(TAPE, &std::fs::read(TAPE).unwrap()).unwrap();
+    tape.play(0);
+    spec.bus.tape = Some(tape);
+    spec.bus.tape_flash = !played;
+    let t = spec.bus.model.frame_t();
+    for _ in 0..120 {
+        spec.run(t);
+    }
+    // ENTER on the menu's first line, the Tape Loader.
+    key(&mut spec, 6, 0, true);
+    for _ in 0..5 {
+        spec.run(t);
+    }
+    key(&mut spec, 6, 0, false);
+    let game_start = address(PLAYED_MAP, "game_start");
+    for _ in 0..5_000_000_000u64 {
+        if spec.cpu.pc == game_start && spec.bus.page_reg & 7 == 0 {
+            return spec;
+        }
+        spec.step_instruction();
+    }
+    panic!("the tape never got to game_start; PC ${:04X}", spec.cpu.pc);
+}
+
+// The rebuilt game as a tape that loads through the ROM. Whatever the loader
+// does on the way, the game has to start as the snapshot starts it: the
+// image from $5B00, every bank as far as the game has anything in it, the
+// stack, the paging and a silent AY. Bank 0 holds the loader's second stage
+// past what the game keeps there, and the screen is the loading screen,
+// which the game clears.
+#[test]
+fn the_tape_starts_the_game_as_the_snapshot_does() {
+    if !have(&[TAPE, PLAYED_START, PLAYED_MAP, "roms/128.rom"]) {
+        return;
+    }
+    starts_as_the_snapshot_does(loaded_from_tape(false));
+}
+
+// The same, played at the ROM's speed, about eleven and a half minutes of
+// the machine's time: fastload hands each block over without the ROM's
+// routine running, so only this shows the loader living with it — its EI as
+// it returns, which the loader's own interrupt routines are there for, and
+// the bank changing under it between blocks.
+#[test]
+fn the_tape_loads_at_the_roms_own_speed() {
+    if !have(&[TAPE, PLAYED_START, PLAYED_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let tape = loaded_from_tape(true);
+    assert!(
+        tape.bus.frame > 30_000,
+        "loaded in {} frames: that was not at the ROM's speed",
+        tape.bus.frame
+    );
+    starts_as_the_snapshot_does(tape);
+}
+
+fn starts_as_the_snapshot_does(tape: Spectrum) {
+    let snap = machine(PLAYED_START);
+    let differs = |what: &str, a: &[u8], b: &[u8]| {
+        if let Some(i) = a.iter().zip(b).position(|(x, y)| x != y) {
+            panic!(
+                "{what}: byte {i:#06X} is ${:02X} from the tape and ${:02X} in the snapshot",
+                a[i], b[i]
+            );
+        }
+    };
+    let main = |s: &Spectrum| {
+        (0x5B00..0xC000u16)
+            .map(|a| s.bus.peek_raw(a))
+            .collect::<Vec<u8>>()
+    };
+    differs("$5B00-$BFFF", &main(&tape), &main(&snap));
+    let blocks = tap_blocks(&std::fs::read(TAPE).unwrap());
+    // Headers and BASIC, the screen, then banks 1, 3, 4, 6, 7 and 0.
+    let banks = &blocks[4..10];
+    for (bank, block) in [1usize, 3, 4, 6, 7, 0].iter().zip(banks) {
+        let mut length = block.len() - 2;
+        if *bank == 0 {
+            length = 0xF840 - 0xC000; // Stage 2 is past this.
+        }
+        let read = |s: &Spectrum| {
+            (0..length as u16)
+                .map(|o| s.bus.bank_byte(*bank, o))
+                .collect::<Vec<u8>>()
+        };
+        differs(&format!("bank {bank}"), &read(&tape), &read(&snap));
+    }
+    assert_eq!(
+        (tape.cpu.sp, tape.bus.page_reg, tape.cpu.iff1),
+        (address(PLAYED_MAP, "stack_top"), 0x10, false),
+        "SP, $7FFD and interrupts as the game starts"
+    );
+    assert_eq!(tape.bus.audio.ay.regs[..14], [0u8; 14], "the AY silent");
+    // And from there it is the same game: the menu it draws, over the
+    // loading screen on one and a blank screen on the other, is the same.
+    let (mut tape, mut snap) = (tape, snap);
+    let t = tape.bus.model.frame_t();
+    for _ in 0..400 {
+        tape.run(t);
+        snap.run(t);
+    }
+    let screen = |s: &Spectrum| {
+        (0x4000..0x5B00u16)
+            .map(|a| s.bus.peek_raw(a))
+            .collect::<Vec<u8>>()
+    };
+    assert!(
+        screen(&snap).iter().any(|b| *b != 0),
+        "the snapshot drew nothing in 400 frames"
+    );
+    differs("the menu after 400 frames", &screen(&tape), &screen(&snap));
+}
