@@ -1422,6 +1422,15 @@ impl Tape {
     /// starts. Handing the bytes over and jumping straight to the next block's
     /// pilot takes that time away, and a loader that needs it — Cobra's has
     /// under two seconds of pilot to catch — never gets started.
+    /// Whether the current block's data has gone past: the tape is in its
+    /// closing edge or its silence, or about to start the next block.
+    pub fn data_behind(&self) -> bool {
+        matches!(
+            self.phase,
+            Phase::PauseEdge { .. } | Phase::BlockPause { .. } | Phase::Next
+        )
+    }
+
     pub fn seek_to_pause_after(&mut self, block: usize) {
         self.pause_span = None;
         self.level = false;

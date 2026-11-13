@@ -460,3 +460,25 @@ fn a_playing_tape_is_what_the_ear_bit_carries() {
         "with a tape playing the line carries the tape, not the loudspeaker"
     );
 }
+
+// A loader of headerless blocks asks for the next one the moment the last is
+// in, before the silence after it has run out. The deck is parked in that
+// silence, and the search used to start at the block it is parked in, so the
+// same block was handed over twice and the load failed for being too short.
+// Headers and data alternate their flags, which is why LOAD "" never saw it.
+#[test]
+fn headerless_blocks_asked_for_back_to_back_are_each_handed_over_once() {
+    let mut spec = machine(vec![
+        block(0xFF, &[1, 2, 3, 4]),
+        block(0xFF, &[5, 6, 7, 8, 9, 10]),
+    ]);
+    call_loader(&mut spec, 0xFF, 0x8000, 4);
+    assert_eq!(spec.cpu.f & 0x01, 0x01, "the first block loaded");
+    call_loader(&mut spec, 0xFF, 0x9000, 6);
+    let got: Vec<u8> = (0x9000..0x9006).map(|a| spec.bus.peek_raw(a)).collect();
+    assert_eq!(
+        (got.as_slice(), spec.cpu.f & 0x01),
+        (&[5u8, 6, 7, 8, 9, 10][..], 0x01),
+        "the second call is handed the second block, and loads"
+    );
+}

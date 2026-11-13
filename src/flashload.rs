@@ -225,7 +225,11 @@ pub fn load_block(spec: &mut Spectrum) -> Loaded {
     // in between, and so does this. The search stops at anything that is not
     // a plain block of bytes — a turbo block or a stretch of pulses belongs
     // to a loader of the game's own, and the ROM would never get past it.
-    let mut index = tape.block;
+    // From the block after this one if its data has already gone by: a
+    // program asking for its next headerless block straight after the last
+    // one, which is what multi-block loaders do, used to be handed the same
+    // block again, the deck being parked in that block's silence.
+    let mut index = tape.block + usize::from(tape.data_behind());
     let found = loop {
         match block_bytes(tape.blocks.get(index)) {
             Some(data) if data.len() >= 2 && data[0] == wanted_flag => break Some(data.to_vec()),
