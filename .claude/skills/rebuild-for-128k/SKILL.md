@@ -163,6 +163,13 @@ its system variables, which a game like this keeps its objects on top of. The
 recording can't follow this build; check the tunes note for note against the
 beeper build instead, with the audio analysed (`tests/alien8_free_ay.rs`).
 
+**The interrupt's table** needs a whole page of RAM at $80 or above. A page of
+$FF in ROM serves on a 48K (pages $39-$3B), but **the 128K's ROM 1 has no page
+of one value**. If the game has filled $8000 up, move a few of its last sprites
+(data the sprite table points at) into freed contended memory and put the table
+where they were, filled with a byte V whose address VV is also free, for the
+handler's jump; then test every sprite type draws the same in both builds.
+
 **Traps:** one fall of the envelope takes 256 clocks per step of its period,
 not 4,096. A sprite drawer that reads with POP and SP inside the sprite must not
 take an interrupt there unless the handler is written for it (stage 4). The

@@ -87,9 +87,12 @@ const WALK: [(usize, u8); 4] = [(2, 0), (5, 0), (1, 0), (5, 1)];
 /// left out.
 const STACK_TOP: u16 = 0x5BA0;
 
-/// The screen, the variables and the forty objects, less the stack.
-fn comparable(spec: &Spectrum) -> Vec<u8> {
-    (0x4000..OBJECTS_END)
+/// The screen, the variables and the forty objects, less the stack. Three
+/// words, $5BCB, $5BCD and $5BCF, point into draw_list, which moves when the
+/// code before it changes length, so they are compared as how far into it
+/// they point.
+fn comparable(spec: &Spectrum, map: &str) -> Vec<u8> {
+    let mut state: Vec<u8> = (0x4000..OBJECTS_END)
         .map(|a| {
             if (0x5B00..STACK_TOP).contains(&a) {
                 0
@@ -97,7 +100,14 @@ fn comparable(spec: &Spectrum) -> Vec<u8> {
                 spec.bus.peek_raw(a)
             }
         })
-        .collect()
+        .collect();
+    let list = address(map, "draw_list");
+    for at in [0x5BCBu16, 0x5BCD, 0x5BCF] {
+        let i = usize::from(at - 0x4000);
+        let word = u16::from_le_bytes([state[i], state[i + 1]]).wrapping_sub(list);
+        state[i..i + 2].copy_from_slice(&word.to_le_bytes());
+    }
+    state
 }
 
 /// What the game is at the end of each of `count` passes from FIRST_PASS,
@@ -124,7 +134,7 @@ fn play_on(mut spec: Spectrum, map: &str, count: usize) -> (Vec<Vec<u8>>, Spectr
         let count = passes(&spec);
         if spec.cpu.pc == end_of_pass && count >= FIRST_PASS && last != Some(count) {
             last = Some(count);
-            out.push(comparable(&spec));
+            out.push(comparable(&spec, map));
         }
     }
     (out, spec)
@@ -293,5 +303,124 @@ fn every_room_is_built_the_same_from_bank_3() {
     assert!(
         different > 100,
         "only {different} rooms built anything different"
+    );
+}
+
+const AY_FREE: &str = "assemblies/knight-lore/out/ay free fixed.szx";
+const AY_FREE_MAP: &str = "assemblies/knight-lore/out/ay free fixed.map";
+
+// Stage 3 puts the sound on the AY, queued and played by an IM 2 interrupt,
+// instead of the beeper's waiting loops, and moves three sprites to make room
+// for the interrupt's table. The sound is no part of the game, so the game
+// has to be the same pass for pass as the room-bank build it was made from.
+#[test]
+fn the_ay_build_plays_the_same_game_pass_for_pass() {
+    if !have(&[BANKED, BANKED_MAP, AY_FREE, AY_FREE_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let banked = play_by_pass(BANKED, BANKED_MAP, 300);
+    let ay = play_by_pass(AY_FREE, AY_FREE_MAP, 300);
+    assert_eq!(
+        first_difference(&banked, &ay),
+        None,
+        "walking from the start of a game"
+    );
+}
+
+// And the sound has to be there: the interrupt taken nearly every frame
+// (only the sprite drawer has it off), the queue moving, and the AY given
+// tones while the player walks about, footsteps and all.
+#[test]
+fn the_ay_build_plays_its_sound_on_the_interrupt() {
+    if !have(&[AY_FREE, AY_FREE_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let mut spec = at_first_pass(AY_FREE, AY_FREE_MAP);
+    let ticks_at = address(AY_FREE_MAP, "ay_ticks");
+    let ticks =
+        |s: &Spectrum| u16::from_le_bytes([s.bus.peek_raw(ticks_at), s.bus.peek_raw(ticks_at + 1)]);
+    let (frame, tick) = (spec.bus.frame, ticks(&spec));
+    let t = spec.bus.model.frame_t();
+    let mut tones = std::collections::BTreeSet::new();
+    for f in 0..1_000usize {
+        let (row, bit) = WALK[f / 50 % WALK.len()];
+        for (r, b) in WALK {
+            key(&mut spec, r, b, (r, b) == (row, bit));
+        }
+        spec.run(t);
+        let regs = spec.bus.audio.ay.regs;
+        tones.insert(u16::from_le_bytes([regs[0], regs[1] & 0x0F]));
+    }
+    let (frames, taken) = (
+        spec.bus.frame - frame,
+        u64::from(ticks(&spec).wrapping_sub(tick)),
+    );
+    eprintln!(
+        "{taken} interrupts in {frames} frames; {} tones",
+        tones.len()
+    );
+    // A third are lost while the sprite drawer has interrupts off, as in
+    // Alien 8's stage 3; stage 4 takes them inside sprites.
+    assert!(
+        taken * 10 >= frames * 6,
+        "{taken} interrupts taken in {frames} frames"
+    );
+    assert_eq!(spec.cpu.im, 2, "the interrupt mode");
+    assert!(
+        tones.len() > 3,
+        "only {} tones set while walking",
+        tones.len()
+    );
+}
+
+// Stage 3 moved sprites 5D, 5E and 5F out of the way of the interrupt's table,
+// and the sprite table's words for them with them. Walking may never draw
+// them, so every one of the 189 object types is drawn through the game's own
+// draw_sprite in both builds, aligned and not, and the buffers compared: a
+// word left pointing where a sprite was would draw the interrupt's table.
+#[test]
+fn every_sprite_draws_the_same_after_the_move() {
+    if !have(&[BANKED, BANKED_MAP, AY_FREE, AY_FREE_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let starts = [
+        (at_first_pass(BANKED, BANKED_MAP), BANKED_MAP),
+        (at_first_pass(AY_FREE, AY_FREE_MAP), AY_FREE_MAP),
+    ];
+    let mut drawn = 0;
+    for kind in 0..189u8 {
+        for x in [0x40u8, 0x43] {
+            let buffers: Vec<Vec<u8>> = starts
+                .iter()
+                .map(|(start, map)| {
+                    let mut spec = start.clone();
+                    let buffer = address(map, "buffer");
+                    for i in 0..0x1800 {
+                        spec.bus.poke(buffer + i, 0);
+                    }
+                    let ix = address(map, "l_BFDB");
+                    spec.bus.poke(ix, kind);
+                    spec.bus.poke(ix + 7, 0);
+                    spec.bus.poke(ix + 0x1A, x);
+                    spec.bus.poke(ix + 0x1B, 0x40);
+                    spec.cpu.ix = ix;
+                    call(&mut spec, address(map, "draw_sprite"));
+                    (buffer..buffer + 0x1800)
+                        .map(|a| spec.bus.peek_raw(a))
+                        .collect()
+                })
+                .collect();
+            if let Some(i) = buffers[0].iter().zip(&buffers[1]).position(|(a, b)| a != b) {
+                panic!(
+                    "type ${kind:02X} at x ${x:02X}: buffer byte {i} is ${:02X} and ${:02X}",
+                    buffers[0][i], buffers[1][i]
+                );
+            }
+            drawn += usize::from(buffers[0].iter().any(|b| *b != 0));
+        }
+    }
+    assert!(
+        drawn > 200,
+        "only {drawn} of 378 draws put anything in the buffer"
     );
 }
