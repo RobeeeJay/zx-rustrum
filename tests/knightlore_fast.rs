@@ -493,6 +493,8 @@ fn every_build_plays_the_same_game_in_busy_rooms() {
         (FAST, FAST_MAP),
         (DRAWING1, DRAWING1_MAP),
         (DRAWING, DRAWING_MAP),
+        (MEMORY1, MEMORY1_MAP),
+        (MEMORY, MEMORY_MAP),
     ];
     let mut need: Vec<String> = BUSY
         .iter()
@@ -1000,16 +1002,17 @@ const PACED: &str = "assemblies/knight-lore/out/paced fixed.szx";
 const PACED_MAP: &str = "assemblies/knight-lore/out/paced fixed.map";
 
 // paced.py swaps the busy-wait at the end of a pass for a wait in HALT, so
-// only time changes: the game, pass for pass, must not.
+// only time changes: the game, pass for pass, must not. It paces the build
+// with the memory reorganised, the last before it.
 #[test]
 fn the_paced_build_plays_the_same_game() {
-    if !have(&[DRAWING, DRAWING_MAP, PACED, PACED_MAP, "roms/128.rom"]) {
+    if !have(&[MEMORY, MEMORY_MAP, PACED, PACED_MAP, "roms/128.rom"]) {
         return;
     }
-    let drawing = play_by_pass(DRAWING, DRAWING_MAP, 300);
+    let unpaced = play_by_pass(MEMORY, MEMORY_MAP, 300);
     let paced = play_by_pass(PACED, PACED_MAP, 300);
     assert_eq!(
-        first_difference(&drawing, &paced),
+        first_difference(&unpaced, &paced),
         None,
         "walking from the start of a game"
     );
@@ -1060,10 +1063,10 @@ fn have_still_rooms(builds: &[&str]) -> bool {
 // just inside the thousandth frame.
 #[test]
 fn the_paced_build_holds_four_frames_a_pass_under_turbo() {
-    if !have_still_rooms(&[DRAWING, DRAWING_MAP, PACED, PACED_MAP]) {
+    if !have_still_rooms(&[MEMORY, MEMORY_MAP, PACED, PACED_MAP]) {
         return;
     }
-    let free = still_speeds(DRAWING, DRAWING_MAP, 4);
+    let free = still_speeds(MEMORY, MEMORY_MAP, 4);
     let paced = still_speeds(PACED, PACED_MAP, 4);
     let normal = still_speeds(PACED, PACED_MAP, 1);
     for (i, ((f, p), n)) in free.iter().zip(&paced).zip(&normal).enumerate() {
@@ -1082,19 +1085,22 @@ fn the_paced_build_holds_four_frames_a_pass_under_turbo() {
     }
 }
 
-// A room slower than the pace waits for little: a pass that happens to come
-// in under four frames is held, so the busy rooms give up a pass or three
-// (240, 195 and 229 unpaced; 237, 195 and 226 paced) and no more.
+// Pacing costs a little below the cap: a pass that comes in under four frames
+// is held to four and one over it is not made up, so a room averages less than
+// the 250 its quickest passes would allow. Measured on the memory build: 241,
+// 196 and 261 passes unpaced in the busy rooms, 239, 195 and 243 paced; the
+// room at frame 91,000, which goes quicker than the pace unpaced, loses the
+// most. More than 4% under the lesser of the two is a wait that is overdone.
 #[test]
-fn the_paced_build_waits_for_little_in_busy_rooms() {
-    if !have_still_rooms(&[DRAWING, DRAWING_MAP, PACED, PACED_MAP]) {
+fn the_paced_build_waits_for_little_more_than_the_pace_in_busy_rooms() {
+    if !have_still_rooms(&[MEMORY, MEMORY_MAP, PACED, PACED_MAP]) {
         return;
     }
-    let free = still_speeds(DRAWING, DRAWING_MAP, 1);
+    let free = still_speeds(MEMORY, MEMORY_MAP, 1);
     let paced = still_speeds(PACED, PACED_MAP, 1);
     for (frame, (f, p)) in BUSY.iter().zip(free.iter().zip(&paced)) {
         assert!(
-            u32::from(*p) * 100 >= u32::from(*f) * 98,
+            u32::from(*p) * 100 >= u32::from((*f).min(250)) * 96,
             "from frame {frame}: {p} passes paced against {f} unpaced"
         );
     }
@@ -1275,23 +1281,24 @@ fn starts_as_the_snapshot_does(tape: Spectrum) {
             .collect::<Vec<u8>>()
     };
     differs("$5BA0-$BFFF", &main(&tape), &main(&snap));
-    let bank = |s: &Spectrum, n: usize, length: u16| {
-        (0..length)
-            .map(|o| s.bus.bank_byte(n, o))
-            .collect::<Vec<u8>>()
-    };
-    differs("bank 0", &bank(&tape, 0, 0x4000), &bank(&snap, 0, 0x4000));
-    // Bank 3 as far as the game has anything in it, from the snapshot: taken
-    // from the tape's block instead, a block cut short passed.
-    let length = (0..0x4000u16)
-        .rev()
-        .find(|o| snap.bus.bank_byte(3, *o) != 0)
-        .map_or(0, |o| o + 1);
-    assert!(
-        length > 0x0E00,
-        "bank 3 of the snapshot holds only {length:#06X} bytes"
-    );
-    differs("bank 3", &bank(&tape, 3, length), &bank(&snap, 3, length));
+    // Each bank as far as the game has anything in it, from the snapshot:
+    // taken from the tape's blocks instead, a block cut short passed.
+    for n in [0usize, 3, 4] {
+        let length = (0..0x4000u16)
+            .rev()
+            .find(|o| snap.bus.bank_byte(n, *o) != 0)
+            .map_or(0, |o| o + 1);
+        assert!(
+            length > 0x0E00,
+            "bank {n} of the snapshot holds only {length:#06X} bytes"
+        );
+        let bank = |s: &Spectrum| {
+            (0..length)
+                .map(|o| s.bus.bank_byte(n, o))
+                .collect::<Vec<u8>>()
+        };
+        differs(&format!("bank {n}"), &bank(&tape), &bank(&snap));
+    }
     assert_eq!(
         (tape.cpu.sp, tape.cpu.iy, tape.bus.page_reg, tape.cpu.iff1),
         (STACK_TOP, 0x5C3A, 0x10, false),
@@ -1316,4 +1323,230 @@ fn starts_as_the_snapshot_does(tape: Spectrum) {
         "the snapshot drew nothing in 400 frames"
     );
     differs("the menu after 400 frames", &screen(&tape), &screen(&snap));
+}
+
+/// T-states spent under each label of the main image, nearest label below
+/// the PC: labels in a bank (a third field in the map) left out, since they
+/// share addresses with fixed code.
+fn profile_into(
+    spec: &mut Spectrum,
+    labels: &[(u16, String)],
+    frames: u64,
+    walk: bool,
+    into: &mut std::collections::HashMap<String, u64>,
+) {
+    let end = spec.bus.total_t() + frames * u64::from(spec.bus.model.frame_t());
+    let start_frame = spec.bus.frame;
+    while spec.bus.total_t() < end {
+        if walk {
+            let walking = WALK[((spec.bus.frame - start_frame) / 100) as usize % WALK.len()];
+            for (row, bit) in WALK {
+                key(spec, row, bit, (row, bit) == walking);
+            }
+        }
+        let (pc, t) = (spec.cpu.pc, spec.bus.total_t());
+        spec.step_instruction();
+        let i = labels.partition_point(|(a, _)| *a <= pc);
+        if i > 0 {
+            *into.entry(labels[i - 1].1.clone()).or_default() += spec.bus.total_t() - t;
+        }
+    }
+}
+
+// Written for assemblies/knight-lore/memory.py, which puts the hottest code
+// in uncontended memory a byte at a time by this: the drawing build, in the
+// three busy rooms and walking from the start, 1,000 frames each.
+#[test]
+#[ignore]
+fn profile_the_drawing_build() {
+    let mut labels: Vec<(u16, String)> = std::fs::read_to_string(DRAWING_MAP)
+        .unwrap()
+        .lines()
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split_whitespace().collect();
+            (f.len() == 2).then(|| {
+                (
+                    u16::from_str_radix(&f[1][1..], 16).unwrap(),
+                    f[0].to_string(),
+                )
+            })
+        })
+        .collect();
+    labels.sort();
+    let mut spent = std::collections::HashMap::new();
+    for frame in BUSY {
+        let sna = std::fs::read(format!("assemblies/knight-lore/out/busy{frame}.sna")).unwrap();
+        let mut spec = busy_machine(&sna, DRAWING, DRAWING_MAP);
+        profile_into(&mut spec, &labels, 1_000, false, &mut spent);
+    }
+    let mut spec = at_first_pass(DRAWING, DRAWING_MAP);
+    profile_into(&mut spec, &labels, 1_000, true, &mut spent);
+    let mut rows: Vec<_> = spent.into_iter().collect();
+    rows.sort_by_key(|r| std::cmp::Reverse(r.1));
+    let text: String = std::iter::once("label tstates\n".to_string())
+        .chain(rows.iter().map(|(n, t)| format!("{n} {t}\n")))
+        .collect();
+    std::fs::write("assemblies/knight-lore/out/profile.txt", text).unwrap();
+}
+
+const MEMORY1: &str = "assemblies/knight-lore/out/memory1 fixed.szx";
+const MEMORY1_MAP: &str = "assemblies/knight-lore/out/memory1 fixed.map";
+
+// memory.py's first step exchanges the sprites with everything that was
+// above $C000: the sprites up into bank 0, and the code, the buffer and the
+// tables down into the room they leave, the hottest code uncontended. Only
+// where things are changes, so the game has to be the same.
+#[test]
+fn the_exchanged_memory_plays_the_same_game() {
+    if !have(&[DRAWING, DRAWING_MAP, MEMORY1, MEMORY1_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let before = play_by_pass(DRAWING, DRAWING_MAP, 300);
+    let after = play_by_pass(MEMORY1, MEMORY1_MAP, 300);
+    assert_eq!(
+        first_difference(&before, &after),
+        None,
+        "walking from the start of a game"
+    );
+}
+
+// print_bcd is handed the buffer address of a number's bottom row, written in
+// the code as a number: the days and the lives, which the walk prints, and
+// three more on the screen at the end of a game, which nothing else here
+// reaches. So both builds draw that screen from the busiest room's state, to
+// where it waits for the keys to be let go, and the screens have to agree.
+#[test]
+fn the_end_of_a_game_is_printed_in_the_same_places() {
+    let sna_path = "assemblies/knight-lore/out/busy91000.sna";
+    if !have(&[
+        sna_path,
+        DRAWING,
+        DRAWING_MAP,
+        MEMORY1,
+        MEMORY1_MAP,
+        "roms/128.rom",
+    ]) {
+        return;
+    }
+    let sna = std::fs::read(sna_path).unwrap();
+    let screens: Vec<Vec<u8>> = [(DRAWING, DRAWING_MAP), (MEMORY1, MEMORY1_MAP)]
+        .iter()
+        .map(|(snap, map)| {
+            let mut spec = busy_machine(&sna, snap, map);
+            spec.cpu.pc = address(map, "game_over_screen");
+            spec.cpu.iff1 = false;
+            spec.cpu.iff2 = false;
+            let stop = address(map, "wait_keys_released");
+            for _ in 0..50_000_000 {
+                spec.step_instruction();
+                if spec.cpu.pc == stop {
+                    return (0x4000..0x5B00u16).map(|a| spec.bus.peek_raw(a)).collect();
+                }
+            }
+            panic!("{snap} never finished the end-of-game screen");
+        })
+        .collect();
+    let lit = screens[0][..0x1800].iter().filter(|b| **b != 0).count();
+    assert!(
+        lit > 500,
+        "only {lit} bytes of the end-of-game screen are drawn"
+    );
+    if let Some(i) = screens[0].iter().zip(&screens[1]).position(|(a, b)| a != b) {
+        panic!(
+            "${:04X} is ${:02X} before the exchange and ${:02X} after",
+            0x4000 + i,
+            screens[0][i],
+            screens[1][i]
+        );
+    }
+}
+
+const MEMORY: &str = "assemblies/knight-lore/out/memory fixed.szx";
+const MEMORY_MAP: &str = "assemblies/knight-lore/out/memory fixed.map";
+
+// memory.py's second step keeps a mirrored copy of every sprite in bank 4 at
+// the same address, and pages in whichever faces the right way instead of
+// mirroring a sprite in place. What is drawn has to be the same.
+#[test]
+fn drawing_from_mirrored_copies_plays_the_same_game() {
+    if !have(&[MEMORY1, MEMORY1_MAP, MEMORY, MEMORY_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let before = play_by_pass(MEMORY1, MEMORY1_MAP, 300);
+    let after = play_by_pass(MEMORY, MEMORY_MAP, 300);
+    assert_eq!(
+        first_difference(&before, &after),
+        None,
+        "walking from the start of a game"
+    );
+}
+
+// Bank 4's copies are made by memory.py, not by the game, so each has to be
+// what the game would have made: the step 1 build is asked to mirror every
+// sprite in place, from a fresh machine each time, and the result compared
+// with bank 4 byte for byte.
+#[test]
+fn every_mirrored_copy_is_what_the_game_would_have_made() {
+    if !have(&[MEMORY1, MEMORY1_MAP, MEMORY, MEMORY_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let mirrored = machine(MEMORY);
+    let fresh = machine(MEMORY1);
+    let table = address(MEMORY1_MAP, "sprite_table");
+    let mut sprites: Vec<u16> = (0..188u16)
+        .map(|i| {
+            u16::from_le_bytes([
+                fresh.bus.peek_raw(table + 2 * i),
+                fresh.bus.peek_raw(table + 2 * i + 1),
+            ])
+        })
+        .filter(|a| fresh.bus.peek_raw(*a) & 0x0F != 0)
+        .collect();
+    sprites.sort();
+    sprites.dedup();
+    let orient = address(MEMORY1_MAP, "orient_sprite");
+    for at in &sprites {
+        let mut spec = machine(MEMORY1);
+        let first = spec.bus.peek_raw(*at);
+        let size = 2 + 2 * u16::from(first & 0x0F) * u16::from(spec.bus.peek_raw(at + 1));
+        // An object wanting it the other way round, and the same way up.
+        spec.cpu.ix = 0x5C08;
+        spec.bus.poke(0x5C08 + 7, first ^ 0x40);
+        call_with(&mut spec, orient, 0, *at, 0);
+        for o in 0..size {
+            let (made, kept) = (
+                spec.bus.peek_raw(at + o),
+                mirrored.bus.bank_byte(4, at - 0xC000 + o),
+            );
+            assert_eq!(
+                made, kept,
+                "sprite at ${at:04X}, byte {o}: the game made ${made:02X}, bank 4 has ${kept:02X}"
+            );
+        }
+    }
+    assert!(sprites.len() > 90, "only {} sprites", sprites.len());
+}
+
+// Measured: in the busy room at frame 91,000, where mirroring took 13% of the
+// time, 229 passes in 1,000 frames became 261; the other two, which mirror
+// little, stayed at 241 and 196, and so did the first room standing still.
+#[test]
+fn drawing_from_mirrored_copies_is_faster_where_sprites_turn() {
+    if !have_still_rooms(&[MEMORY1, MEMORY1_MAP, MEMORY, MEMORY_MAP]) {
+        return;
+    }
+    let before = still_speeds(MEMORY1, MEMORY1_MAP, 1);
+    let after = still_speeds(MEMORY, MEMORY_MAP, 1);
+    assert!(
+        u32::from(after[2]) * 100 >= u32::from(before[2]) * 110,
+        "from frame 91,000: {} passes against {}; all {before:?} and {after:?}",
+        after[2],
+        before[2]
+    );
+    for (i, (b, a)) in before.iter().zip(&after).enumerate() {
+        assert!(
+            u32::from(*a) * 100 >= u32::from(*b) * 99,
+            "room {i}: {a} against {b}"
+        );
+    }
 }

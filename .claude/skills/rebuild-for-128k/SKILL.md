@@ -239,6 +239,16 @@ start or end of a game. Then `banked.py`, a step at a time, each behind
   buffer, the tables and the stack in bank 2 ($8000-$BFFF), **by a measured
   profile, not call counts** (call counts put a fifth of a busy room's time in
   contended memory). Sprites go to bank 0 at $C000.
+- **Find every address written as a number before moving what it points at.**
+  Scanning for words above $C000 found Knight Lore's table pages and one buffer
+  address, and missed five more that looked like print positions: `print_bcd`
+  took the buffer address of a number's bottom row. Read what each routine does
+  with HL before calling a constant a position, and play to the screens nothing
+  else reaches (the end of a game) in both builds.
+- **The algorithms can come before the banks.** Knight Lore did the depth test
+  and row clipping (code only, in place) before the exchange, and the exchange
+  then only had to move code. Order the changes that need memory last. Leave
+  spare bytes in each region the exchange fills: later steps grow the code.
 - **Make once what the game makes every pass.** Alien 8 mirrored sprites in
   place for every object facing the other way; a mirrored copy of every sprite
   in bank 4 removed that, and pre-shifted copies of the sprites drawn shifted
