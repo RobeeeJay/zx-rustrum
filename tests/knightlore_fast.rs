@@ -424,3 +424,121 @@ fn every_sprite_draws_the_same_after_the_move() {
         "only {drawn} of 378 draws put anything in the buffer"
     );
 }
+
+const BUSY: [u32; 3] = [9_000, 25_000, 91_000];
+
+/// A build with the game's state from `sna` (the original at end_of_pass in a
+/// busy room) carried into it: the screen, the variables and objects, and the
+/// buffer, which is wherever the build's map says. Started at end_of_pass,
+/// with a Kempston stick fitted as the recording was played with (none would
+/// leave the game reading the floating bus, which depends on timing), and the
+/// AY's interrupt where the build has one.
+fn busy_machine(sna: &[u8], snap: &str, map: &str) -> Spectrum {
+    let mut spec = machine(snap);
+    for a in 0x4000..OBJECTS_END {
+        spec.bus.poke(a, sna[27 + usize::from(a) - 0x4000]);
+    }
+    let buffer = address(map, "buffer");
+    for i in 0..0x1800u16 {
+        spec.bus
+            .poke(buffer + i, sna[27 + 0xD8F3 - 0x4000 + usize::from(i)]);
+    }
+    let list = address(map, "draw_list");
+    for at in [0x5BCB, 0x5BCD, 0x5BCF] {
+        spec.bus.poke(at, list as u8);
+        spec.bus.poke(at + 1, (list >> 8) as u8);
+    }
+    spec.bus.set_joystick(zx_rustrum::joystick::Kind::Kempston);
+    spec.cpu.pc = address(map, "end_of_pass");
+    spec.cpu.sp = STACK_TOP;
+    let ay = std::fs::read_to_string(map)
+        .unwrap()
+        .contains("\nay_vectors $");
+    if ay {
+        spec.cpu.i = (address(map, "ay_vectors") >> 8) as u8;
+        spec.cpu.im = 2;
+    }
+    spec.cpu.iff1 = ay;
+    spec.cpu.iff2 = ay;
+    spec
+}
+
+/// What the game is at the end of each of `count` passes, keys left alone.
+fn play_still(mut spec: Spectrum, map: &str, count: usize) -> Vec<Vec<u8>> {
+    let end_of_pass = address(map, "end_of_pass");
+    let (mut out, mut last, mut steps) = (Vec::new(), None, 0u64);
+    while out.len() < count {
+        spec.step_instruction();
+        steps += 1;
+        assert!(steps < 2_000_000_000, "the game stopped making passes");
+        let n = passes(&spec);
+        if spec.cpu.pc == end_of_pass && last != Some(n) {
+            last = Some(n);
+            out.push(comparable(&spec, map));
+        }
+    }
+    out
+}
+
+// Walking never leaves the first room, which has a dozen objects. The three
+// busiest rooms of the recording have 38 to 40, the drawing order and the
+// copying at their busiest, and every build has to play the same game in
+// each as stage 1 does.
+#[test]
+fn every_build_plays_the_same_game_in_busy_rooms() {
+    let builds = [
+        (STAGE1, STAGE1_MAP),
+        (BANKED, BANKED_MAP),
+        (AY_FREE, AY_FREE_MAP),
+    ];
+    let mut need: Vec<String> = BUSY
+        .iter()
+        .map(|f| format!("assemblies/knight-lore/out/busy{f}.sna"))
+        .collect();
+    need.extend(
+        builds
+            .iter()
+            .flat_map(|(s, m)| [s.to_string(), m.to_string()]),
+    );
+    need.push("roms/128.rom".into());
+    if !have(&need.iter().map(String::as_str).collect::<Vec<_>>()) {
+        return;
+    }
+    let mut changed = 0;
+    for frame in BUSY {
+        let sna = std::fs::read(format!("assemblies/knight-lore/out/busy{frame}.sna")).unwrap();
+        let runs: Vec<Vec<Vec<u8>>> = builds
+            .iter()
+            .map(|(s, m)| play_still(busy_machine(&sna, s, m), m, 120))
+            .collect();
+        for (i, run) in runs.iter().enumerate().skip(1) {
+            if let Some(what) = first_difference(&runs[0], run) {
+                panic!(
+                    "from frame {frame}, {} against stage 1: {what}",
+                    builds[i].0
+                );
+            }
+        }
+        // Busy, and alive: the objects in use, and the game moving on.
+        let objects = |p: &Vec<u8>| (0..40usize).filter(|o| p[0x1C08 + o * 32] != 0).count();
+        let (first, last) = (&runs[0][0], &runs[0][119]);
+        assert!(
+            objects(first) >= 30,
+            "from frame {frame}: only {} objects",
+            objects(first)
+        );
+        // Room 240 (frame 9,000) is mostly fixed blocks, and only the
+        // player and one other object change; the other two have a dozen or
+        // more moving.
+        let moved = (0x1C08..0x2108).filter(|i| first[*i] != last[*i]).count();
+        assert!(
+            moved > 0,
+            "from frame {frame}: nothing in the objects changed in 120 passes"
+        );
+        changed += moved;
+    }
+    assert!(
+        changed > 60,
+        "{changed} bytes of the objects changed in all three rooms"
+    );
+}
