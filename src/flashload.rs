@@ -21,14 +21,23 @@ use crate::tape::Block;
 /// Where the 48K ROM's LD-BYTES starts.
 pub const LD_BYTES: u16 = 0x0556;
 
+/// LD-BYTES past its own first steps and its push of SA/LD-RET, the routine
+/// that puts interrupts back on as it returns. A loader that wants them kept
+/// off — so that it needs no interrupt table while the block it is loading
+/// covers the one it had — does those steps itself, pushes its own return in
+/// place of SA/LD-RET, and comes in here.
+pub const LD_BYTES_BODY: u16 = 0x0562;
+
 /// The first bytes of it: `INC D / EX AF,AF' / DEC D / DI / LD A,$0F /
-/// OUT ($FE),A`.
+/// OUT ($FE),A / LD HL,$053F / PUSH HL`, up to LD_BYTES_BODY.
 ///
 /// Checked rather than assumed, because $0556 is only the loader while the
 /// right ROM is paged in — a 128K is running its own ROM until a game pages
 /// the other one back — and because a program is free to put anything it
 /// likes at that address in RAM.
-const LD_BYTES_SIGNATURE: [u8; 8] = [0x14, 0x08, 0x15, 0xF3, 0x3E, 0x0F, 0xD3, 0xFE];
+const LD_BYTES_SIGNATURE: [u8; 12] = [
+    0x14, 0x08, 0x15, 0xF3, 0x3E, 0x0F, 0xD3, 0xFE, 0x21, 0x3F, 0x05, 0xE5,
+];
 
 /// A byte of a sampling loop that may be anything: the port's high byte, a
 /// jump displacement, a filler.
@@ -197,7 +206,8 @@ pub enum Loaded {
 /// the return address popped, the registers set, and the deck moved on to the
 /// next block.
 pub fn load_block(spec: &mut Spectrum) -> Loaded {
-    if spec.cpu.pc != LD_BYTES || !rom_loader_is_here(spec) {
+    let past_push = spec.cpu.pc == LD_BYTES_BODY;
+    if !(spec.cpu.pc == LD_BYTES || past_push) || !rom_loader_is_here(spec) {
         return Loaded::NotOurs;
     }
     let Some(tape) = spec.bus.tape.as_ref() else {
@@ -214,9 +224,15 @@ pub fn load_block(spec: &mut Spectrum) -> Loaded {
 
     // What the caller asked for: the flag it expects in A, the address in IX,
     // the length in DE, and carry telling load from verify. The routine keeps
-    // them in the alternate set, but it has not run yet, so they are here.
-    let wanted_flag = spec.cpu.a;
-    let verifying = spec.cpu.f & 0x01 == 0;
+    // the flag and the carry in the alternate set: from the start it has not
+    // run yet, so they are still here; come in past its first steps, the
+    // caller's EX AF,AF' has already put them there.
+    let (wanted_flag, flags) = if past_push {
+        (spec.cpu.a_, spec.cpu.f_)
+    } else {
+        (spec.cpu.a, spec.cpu.f)
+    };
+    let verifying = flags & 0x01 == 0;
     let mut at = spec.cpu.ix;
     let wanted = ((spec.cpu.d as u16) << 8) | spec.cpu.e as u16;
 
@@ -264,7 +280,7 @@ pub fn load_block(spec: &mut Spectrum) -> Loaded {
     // mistyped POKE ends in.
     let ok = enough && body.len() > count && parity == 0;
     seek_past(spec, index);
-    finish(spec, ok, at, wanted - count as u16);
+    finish(spec, ok, at, wanted - count as u16, !past_push);
     Loaded::Block {
         bytes: count,
         wanted: wanted as usize,
@@ -308,7 +324,7 @@ fn seek_past(spec: &mut Spectrum, block: usize) {
 }
 
 /// Leave the machine where LD-BYTES would have left it, and take the return.
-fn finish(spec: &mut Spectrum, ok: bool, at: u16, left: u16) {
+fn finish(spec: &mut Spectrum, ok: bool, at: u16, left: u16, through_sa_ld_ret: bool) {
     spec.cpu.ix = at;
     spec.cpu.d = (left >> 8) as u8;
     spec.cpu.e = left as u8;
@@ -320,9 +336,10 @@ fn finish(spec: &mut Spectrum, ok: bool, at: u16, left: u16) {
         spec.cpu.f & !0x01
     };
     spec.cpu.h = 0;
-    // Interrupts are disabled on the way in and put back on the way out.
-    spec.cpu.iff1 = true;
-    spec.cpu.iff2 = true;
+    // Interrupts are disabled on the way in, and SA/LD-RET puts them back on
+    // the way out. Come in past its push, nothing does: they stay off.
+    spec.cpu.iff1 = through_sa_ld_ret;
+    spec.cpu.iff2 = through_sa_ld_ret;
 
     let low = spec.bus.mem(spec.cpu.sp) as u16;
     let high = spec.bus.mem(spec.cpu.sp.wrapping_add(1)) as u16;

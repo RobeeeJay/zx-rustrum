@@ -1199,7 +1199,13 @@ const PLAYED_MAP: &str = "assemblies/knight-lore/Knight Lore paced.map";
 /// block handed to the ROM's LD-BYTES whole, as fastload does, or `played`
 /// at the ROM's speed.
 fn loaded_from_tape(played: bool) -> Spectrum {
+    loaded_from_tape_at(played, 1)
+}
+
+/// The same with the CPU running at `turbo` times its speed.
+fn loaded_from_tape_at(played: bool, turbo: u32) -> Spectrum {
     let mut spec = Spectrum::with_model(zx_rustrum::machine::Model::Spectrum128);
+    spec.bus.turbo = turbo;
     spec.load_rom(&std::fs::read("roms/128.rom").unwrap());
     let mut tape = zx_rustrum::tape::Tape::from_bytes(TAPE, &std::fs::read(TAPE).unwrap()).unwrap();
     tape.play(0);
@@ -1209,20 +1215,25 @@ fn loaded_from_tape(played: bool) -> Spectrum {
     for _ in 0..120 {
         spec.run(t);
     }
-    // ENTER on the menu's first line, the Tape Loader.
+    // ENTER on the menu's first line, the Tape Loader, held five frames. It
+    // is watched for game_start from the moment it goes down: with Fastload
+    // at four times the speed the whole tape is in within those five frames.
     key(&mut spec, 6, 0, true);
-    for _ in 0..5 {
-        spec.run(t);
-    }
-    key(&mut spec, 6, 0, false);
+    let release = spec.bus.frame + 5;
     let game_start = address(PLAYED_MAP, "game_start");
     for _ in 0..5_000_000_000u64 {
+        if spec.bus.frame >= release {
+            key(&mut spec, 6, 0, false);
+        }
         if spec.cpu.pc == game_start && spec.bus.page_reg & 7 == 0 {
             return spec;
         }
         spec.step_instruction();
     }
-    panic!("the tape never got to game_start; PC ${:04X}", spec.cpu.pc);
+    panic!(
+        "the tape never got to game_start; PC ${:04X} at frame {}",
+        spec.cpu.pc, spec.bus.frame
+    );
 }
 
 // The rebuilt game as a tape that loads through the ROM, which has to start
@@ -1236,7 +1247,29 @@ fn the_tape_starts_the_game_as_the_snapshot_does() {
     if !have(&[TAPE, PLAYED, PLAYED_MAP, "roms/128.rom"]) {
         return;
     }
-    starts_as_the_snapshot_does(loaded_from_tape(false));
+    let tape = loaded_from_tape(false);
+    // Every block handed over, the last too, which stage 2 asks for at $0562
+    // with interrupts kept off: before Fastload answered there, it loaded
+    // from the pulses and took 7,055 frames, and this test passed anyway.
+    assert!(
+        tape.bus.frame < 1_000,
+        "loaded in {} frames: not every block was handed over",
+        tape.bus.frame
+    );
+    starts_as_the_snapshot_does(tape);
+}
+
+// The paced build is for the CPU turbo, and the ROM times a tape's pulses in
+// CPU cycles, so at four times the speed it can't read them: a block Fastload
+// doesn't answer never loads. Stage 2's last block was one, and the tape sat
+// on its loading screen for ever.
+#[test]
+fn the_tape_loads_with_fastload_under_the_cpu_turbo() {
+    if !have(&[TAPE, PLAYED, PLAYED_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let tape = loaded_from_tape_at(false, 4);
+    starts_as_the_snapshot_does(tape);
 }
 
 // The same at the ROM's speed: fastload hands each block over without the

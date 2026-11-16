@@ -1,6 +1,6 @@
 //! Handing tape blocks straight to the ROM's loader.
 
-use zx_rustrum::flashload::LD_BYTES;
+use zx_rustrum::flashload::{LD_BYTES, LD_BYTES_BODY};
 use zx_rustrum::machine::{Spectrum, FRAME_T};
 use zx_rustrum::tape::{Block, Tape};
 
@@ -18,12 +18,13 @@ fn block(flag: u8, data: &[u8]) -> Block {
 }
 
 /// A machine with just enough ROM to be recognised as the one that owns
-/// LD-BYTES: the six instructions the check reads, and a RET at the end of
-/// them in case anything falls through.
+/// LD-BYTES: the eight instructions the check reads, up to the push of
+/// SA/LD-RET, and RETs after them in case anything falls through.
 fn machine(blocks: Vec<Block>) -> Spectrum {
     let mut rom = vec![0xC9u8; 0x4000];
-    rom[LD_BYTES as usize..LD_BYTES as usize + 8]
-        .copy_from_slice(&[0x14, 0x08, 0x15, 0xF3, 0x3E, 0x0F, 0xD3, 0xFE]);
+    rom[LD_BYTES as usize..LD_BYTES as usize + 12].copy_from_slice(&[
+        0x14, 0x08, 0x15, 0xF3, 0x3E, 0x0F, 0xD3, 0xFE, 0x21, 0x3F, 0x05, 0xE5,
+    ]);
     let mut spec = Spectrum::new();
     spec.load_rom(&rom);
     spec.bus.tape = Some(Tape::from_blocks("test".into(), blocks));
@@ -480,5 +481,41 @@ fn headerless_blocks_asked_for_back_to_back_are_each_handed_over_once() {
         (got.as_slice(), spec.cpu.f & 0x01),
         (&[5u8, 6, 7, 8, 9, 10][..], 0x01),
         "the second call is handed the second block, and loads"
+    );
+}
+
+/// A loader that must keep interrupts off while its last block covers its own
+/// interrupt table does LD-BYTES's first steps itself, pushes its own return
+/// in place of SA/LD-RET (which ends in EI), and comes in at $0562. Knight
+/// Lore's rebuilt tape does that, and Fastload answered only $0556, so its
+/// biggest block was left to load from the pulses: two and a half minutes of
+/// machine time, and never at all with the CPU turbo on. From $0562 the flag
+/// and the load/verify carry are in the alternate set, where the caller's
+/// EX AF,AF' put them, and the return leaves interrupts as they were.
+#[test]
+fn a_loader_that_comes_in_past_the_push_of_sa_ld_ret_is_answered_too() {
+    let mut spec = machine(vec![block(0xFF, &[9, 8, 7, 6])]);
+    spec.cpu.sp = 0x7FFE;
+    spec.bus.poke(0x7FFE, 0x34);
+    spec.bus.poke(0x7FFF, 0x12); // its own return, $1234
+                                 // LD A,$FF / SCF / INC D / EX AF,AF' / DEC D / DI, done by the caller.
+    spec.cpu.a_ = 0xFF;
+    spec.cpu.f_ = 0x01;
+    spec.cpu.a = 0x0F;
+    spec.cpu.f = 0x00;
+    spec.cpu.iff1 = false;
+    spec.cpu.iff2 = false;
+    spec.cpu.ix = 0x8000;
+    spec.cpu.d = 0;
+    spec.cpu.e = 4;
+    spec.cpu.pc = LD_BYTES_BODY;
+    spec.step_instruction();
+    let loaded: Vec<u8> = (0..4).map(|o| spec.bus.mem(0x8000 + o)).collect();
+    assert_eq!(loaded, [9, 8, 7, 6], "the block, handed over from $0562");
+    assert_eq!(spec.cpu.f & 0x01, 1, "carry set says it loaded");
+    assert_eq!(spec.cpu.pc, 0x1234, "returned to the caller's own address");
+    assert!(
+        !spec.cpu.iff1 && !spec.cpu.iff2,
+        "interrupts left off, as the ROM would leave them from here"
     );
 }

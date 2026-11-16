@@ -130,6 +130,21 @@ tape is running: `LOAD ""` with the deck paused waits for Play, as it should.
 Without that check the whole tape ran through the moment the ROM asked for its
 first block, leaving the machine part way into a tape nobody had started.
 
+**There are two ways in.** A loader that needs interrupts kept off can't
+let LD-BYTES return through SA/LD-RET at $053F, which ends in `EI`, so it does
+the routine's first steps itself (`INC D / EX AF,AF' / DEC D / DI / LD A,$0F /
+OUT ($FE),A`), pushes its own return in place of SA/LD-RET, and jumps to
+**$0562**, past the push. Fastload answers there too, checking the four bytes
+of `LD HL,$053F / PUSH HL` as well as the first eight. From there the flag and
+the load/verify carry are in the alternate AF, where the caller's `EX AF,AF'`
+put them, and the return leaves interrupts off, as the ROM would. Knight Lore's
+rebuilt 128K tape loads its last block this way, and until Fastload answered
+$0562 that block was read from the pulses: 7,055 frames instead of a few
+hundred, and never at all with the CPU turbo on, which leaves the ROM unable to
+time a pulse. Its tape test had passed regardless, since it checked where the
+load ended and not how; it now checks the frames, and loads under the turbo
+too.
+
 The first block of a session sometimes still loads at tape speed. The ROM sits
 *inside* LD-BYTES waiting for a pilot tone, and the answer is only given on
 entry — so if the machine is already in there when Play is pressed, that block

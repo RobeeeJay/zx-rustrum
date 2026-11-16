@@ -2199,7 +2199,8 @@ impl Spectrum {
         // when the switch is off, and it is only on while somebody is loading
         // a tape in a hurry.
         if self.bus.tape_flash
-            && self.cpu.pc == crate::flashload::LD_BYTES
+            && (self.cpu.pc == crate::flashload::LD_BYTES
+                || self.cpu.pc == crate::flashload::LD_BYTES_BODY)
             && crate::flashload::load_block(self) != crate::flashload::Loaded::NotOurs
         {
             return;

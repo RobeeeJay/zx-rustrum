@@ -289,7 +289,8 @@ known.
 **Fastload answers the ROM instead of playing to it.** A tape loads at
 1,500 baud however fast the machine is run — the pulses take as long as they
 take — so Max speed shortens the wait and cannot remove it. `src/flashload.rs`
-removes it: when the machine calls LD-BYTES at $0556, the next block with the
+removes it: when the machine calls LD-BYTES at $0556 (or jumps in at $0562,
+past the push of the return that turns interrupts on), the next block with the
 flag byte it asked for is copied into memory, the registers are left as the
 routine would have left them, and the return is taken there and then. Border
 Break loads in two frames instead of 2,605, ending in the same place with the
