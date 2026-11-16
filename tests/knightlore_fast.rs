@@ -102,11 +102,17 @@ fn comparable(spec: &Spectrum, map: &str) -> Vec<u8> {
         })
         .collect();
     let list = address(map, "draw_list");
-    for at in [0x5BCBu16, 0x5BCD, 0x5BCF] {
+    for at in [0x5BCBu16, 0x5BCD] {
         let i = usize::from(at - 0x4000);
         let word = u16::from_le_bytes([state[i], state[i + 1]]).wrapping_sub(list);
         state[i..i + 2].copy_from_slice(&word.to_le_bytes());
     }
+    // $5BCF is where the drawing order's scan had got to, written by
+    // find_in_front before every read: what is left in it after a pass is
+    // never used. Going back one step (memory.py 4) ends the scan somewhere
+    // else on the way to the same order, so it is left out; the order itself
+    // is checked by every_pile_is_drawn_in_the_same_order.
+    state[0x1BCF..0x1BD1].copy_from_slice(&[0, 0]);
     state
 }
 
@@ -495,6 +501,7 @@ fn every_build_plays_the_same_game_in_busy_rooms() {
         (DRAWING, DRAWING_MAP),
         (EFFECTS, EFFECTS_MAP),
         (MEMORY2, MEMORY2_MAP),
+        (MEMORY3, MEMORY3_MAP),
         (MEMORY, MEMORY_MAP),
     ];
     let mut need: Vec<String> = BUSY
@@ -1088,10 +1095,10 @@ fn the_paced_build_holds_four_frames_a_pass_under_turbo() {
 
 // Pacing costs a little below the cap: a pass that comes in under four frames
 // is held to four and one over it is not made up, so a room averages less than
-// the 250 its quickest passes would allow. Measured on the memory build: 244,
-// 198 and 262 passes unpaced in the busy rooms, 241, 198 and 242 paced; the
-// room at frame 91,000, which goes quicker than the pace unpaced, loses the
-// most. More than 4% under the lesser of the two is a wait that is overdone.
+// the 250 its quickest passes would allow. Measured on the memory build: 265,
+// 203 and 274 passes unpaced in the busy rooms, 248, 203 and 248 paced; the
+// rooms at frames 9,000 and 91,000, which go quicker than the pace unpaced,
+// lose the most. More than 4% under the lesser of the two is a wait that is overdone.
 #[test]
 fn the_paced_build_waits_for_little_more_than_the_pace_in_busy_rooms() {
     if !have_still_rooms(&[MEMORY, MEMORY_MAP, PACED, PACED_MAP]) {
@@ -1604,19 +1611,19 @@ fn build_tables_still_makes_the_shift_tables() {
     }
 }
 
-const MEMORY: &str = "assemblies/knight-lore/out/memory fixed.szx";
-const MEMORY_MAP: &str = "assemblies/knight-lore/out/memory fixed.map";
+const MEMORY3: &str = "assemblies/knight-lore/out/memory3 fixed.szx";
+const MEMORY3_MAP: &str = "assemblies/knight-lore/out/memory3 fixed.map";
 
 // memory.py's third step draws a sprite already shifted, where banks 6, 1 and
 // 7 hold a copy, by the aligned path instead of shifting it as it goes. What is
 // drawn has to be the same.
 #[test]
 fn drawing_sprites_already_shifted_plays_the_same_game() {
-    if !have(&[MEMORY2, MEMORY2_MAP, MEMORY, MEMORY_MAP, "roms/128.rom"]) {
+    if !have(&[MEMORY2, MEMORY2_MAP, MEMORY3, MEMORY3_MAP, "roms/128.rom"]) {
         return;
     }
     let before = play_by_pass(MEMORY2, MEMORY2_MAP, 300);
-    let after = play_by_pass(MEMORY, MEMORY_MAP, 300);
+    let after = play_by_pass(MEMORY3, MEMORY3_MAP, 300);
     assert_eq!(
         first_difference(&before, &after),
         None,
@@ -1632,12 +1639,12 @@ fn drawing_sprites_already_shifted_plays_the_same_game() {
 // test can't pass by never using one.
 #[test]
 fn every_sprite_draws_the_same_from_a_copy_already_shifted() {
-    if !have(&[MEMORY2, MEMORY2_MAP, MEMORY, MEMORY_MAP, "roms/128.rom"]) {
+    if !have(&[MEMORY2, MEMORY2_MAP, MEMORY3, MEMORY3_MAP, "roms/128.rom"]) {
         return;
     }
     let mut old = at_first_pass(MEMORY2, MEMORY2_MAP);
-    let mut new = at_first_pass(MEMORY, MEMORY_MAP);
-    let table = address(MEMORY_MAP, "sprite_table");
+    let mut new = at_first_pass(MEMORY3, MEMORY3_MAP);
+    let table = address(MEMORY3_MAP, "sprite_table");
     let (types, slots) = (0xFD00u16, 0xFDC0u16);
     let mut served = 0;
     for kind in 0..188u16 {
@@ -1662,7 +1669,7 @@ fn every_sprite_draws_the_same_from_a_copy_already_shifted() {
                 }
                 for ones in [false, true] {
                     let mut after = Vec::new();
-                    for (spec, map) in [(&mut old, MEMORY2_MAP), (&mut new, MEMORY_MAP)] {
+                    for (spec, map) in [(&mut old, MEMORY2_MAP), (&mut new, MEMORY3_MAP)] {
                         let buffer = address(map, "buffer");
                         for i in 0..0x1800u16 {
                             let b = if ones {
@@ -1707,11 +1714,11 @@ fn every_sprite_draws_the_same_from_a_copy_already_shifted() {
 // now looks in the directory first.
 #[test]
 fn drawing_sprites_already_shifted_is_a_little_faster() {
-    if !have_still_rooms(&[MEMORY2, MEMORY2_MAP, MEMORY, MEMORY_MAP]) {
+    if !have_still_rooms(&[MEMORY2, MEMORY2_MAP, MEMORY3, MEMORY3_MAP]) {
         return;
     }
     let before = still_speeds(MEMORY2, MEMORY2_MAP, 1);
-    let after = still_speeds(MEMORY, MEMORY_MAP, 1);
+    let after = still_speeds(MEMORY3, MEMORY3_MAP, 1);
     for (i, (b, a)) in before.iter().zip(&after).enumerate() {
         assert!(
             a >= b,
@@ -1950,6 +1957,225 @@ fn the_effects_cost_no_more_than_two_per_cent() {
         assert!(
             u32::from(*a) * 100 >= u32::from(*b) * 98,
             "room {i}: {a} against {b}; all {before:?} and {after:?}"
+        );
+    }
+}
+
+const MEMORY: &str = "assemblies/knight-lore/out/memory fixed.szx";
+const MEMORY_MAP: &str = "assemblies/knight-lore/out/memory fixed.map";
+
+// memory.py's fourth step, drawing.py's goes_back: after drawing an object the
+// drawing order goes back one step down its chain instead of beginning again.
+// Drawing changes nothing a pair test reads, so the order, and the game, have
+// to be the same.
+#[test]
+fn going_back_one_step_plays_the_same_game() {
+    if !have(&[MEMORY3, MEMORY3_MAP, MEMORY, MEMORY_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let before = play_by_pass(MEMORY3, MEMORY3_MAP, 300);
+    let after = play_by_pass(MEMORY, MEMORY_MAP, 300);
+    assert_eq!(
+        first_difference(&before, &after),
+        None,
+        "walking from the start of a game"
+    );
+}
+
+/// The objects in the order draw_object is entered, for one call of
+/// draw_in_order, and how many times `label` was passed on the way.
+/// Interrupts are kept off throughout: the sprite drawer turns them on after a
+/// sprite's first row, and one taken with PC at draw_object came back to it,
+/// counting that draw twice in one build and not the other.
+fn drawn_in_order(spec: &mut Spectrum, map: &str, label: &str) -> (Vec<u16>, usize) {
+    let (start, draw, counted) = (
+        address(map, "draw_in_order"),
+        address(map, "draw_object"),
+        address(map, label),
+    );
+    let (was, pc) = (spec.cpu.sp, spec.cpu.pc);
+    let top = was.wrapping_sub(16);
+    spec.cpu.sp = top;
+    spec.bus.poke(top, 0);
+    spec.bus.poke(top + 1, 0);
+    spec.cpu.pc = start;
+    spec.cpu.iff1 = false;
+    spec.cpu.iff2 = false;
+    let (mut order, mut passed) = (Vec::new(), 0);
+    for _ in 0..50_000_000 {
+        if spec.cpu.pc == draw {
+            order.push(spec.cpu.ix);
+        }
+        if spec.cpu.pc == counted {
+            passed += 1;
+        }
+        spec.cpu.iff1 = false;
+        spec.step_instruction();
+        if spec.cpu.pc == 0 && spec.cpu.sp == top + 2 {
+            spec.cpu.sp = was;
+            spec.cpu.pc = pc;
+            return (order, passed);
+        }
+    }
+    panic!("draw_in_order never returned");
+}
+
+// Going back one step down the chain has to draw in exactly the order
+// beginning again did. The busiest room's objects are piled into a small
+// space, 1,000 times, so that pairs overlap and cycles happen, with a few
+// made charms so that one is now and then changed to $BB, which sends it back
+// to beginning again. Both builds draw each pile, and the order and every
+// object afterwards have to match.
+#[test]
+fn every_pile_is_drawn_in_the_same_order() {
+    let sna_path = "assemblies/knight-lore/out/busy91000.sna";
+    if !have(&[
+        sna_path,
+        MEMORY3,
+        MEMORY3_MAP,
+        MEMORY,
+        MEMORY_MAP,
+        "roms/128.rom",
+    ]) {
+        return;
+    }
+    let sna = std::fs::read(sna_path).unwrap();
+    let mut old = busy_machine(&sna, MEMORY3, MEMORY3_MAP);
+    let mut new = busy_machine(&sna, MEMORY, MEMORY_MAP);
+    let mut seed = 0x1234_5679u32;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        seed
+    };
+    let (mut drawn, mut back, mut charms) = (0, 0, 0);
+    for trial in 0..1_000 {
+        let mut objects = sna[27 + 0x1C08..27 + 0x2108].to_vec();
+        // The room has charms of its own; in nine piles of ten they become an
+        // ordinary block of the room's, so that stepping back is what is tested.
+        let block = objects
+            .chunks(32)
+            .map(|o| o[0])
+            .find(|t| *t > 1 && !(0x60..0x67).contains(t))
+            .unwrap();
+        for slot in objects.chunks_mut(32) {
+            if trial % 10 != 0 && (0x60..0x67).contains(&slot[0]) {
+                slot[0] = block;
+            }
+            if slot[0] == 0 {
+                continue;
+            }
+            // Within 24 of the middle of the room in x and y, 16 in height.
+            slot[1] = 0x70 + (next() % 24) as u8;
+            slot[2] = 0x70 + (next() % 24) as u8;
+            slot[3] = 0x80 + (next() % 16) as u8;
+            // Charms in every tenth pile only: one changed sends the rest of
+            // the pass back to beginning again, which would leave little else
+            // tested.
+            if trial % 10 == 0 && next() % 16 == 0 {
+                slot[0] = 0x60 + (next() % 7) as u8;
+            }
+            slot[7] |= 0x10;
+        }
+        let mut after = Vec::new();
+        for (spec, map, label) in [
+            (&mut old, MEMORY3_MAP, "draw_object"),
+            (&mut new, MEMORY_MAP, "draw_order_back"),
+        ] {
+            for (i, b) in objects.iter().enumerate() {
+                spec.bus.poke(0x5C08 + i as u16, *b);
+            }
+            call(spec, address(map, "list_to_draw"));
+            let (order, passed) = drawn_in_order(spec, map, label);
+            if map == MEMORY_MAP {
+                back += passed;
+                charms += usize::from(spec.bus.peek_raw(address(map, "draw_order_passed")) != 0);
+            } else {
+                drawn += order.len();
+            }
+            let state: Vec<u8> = (0x5C08..0x6108u16).map(|a| spec.bus.peek_raw(a)).collect();
+            after.push((order, state));
+        }
+        assert_eq!(
+            after[0].0, after[1].0,
+            "trial {trial}: the order objects were drawn in"
+        );
+        if let Some(i) = after[0].1.iter().zip(&after[1].1).position(|(a, b)| a != b) {
+            panic!(
+                "trial {trial}: object byte ${:04X} is ${:02X} and ${:02X}",
+                0x5C08 + i,
+                after[0].1[i],
+                after[1].1[i]
+            );
+        }
+    }
+    // Measured: 29,127 steps back in 40,000 draws, 100 piles with a charm changed.
+    assert!(back > 20_000, "only {back} steps back in {drawn} draws");
+    assert!(charms > 50, "only {charms} piles had a charm changed");
+}
+
+const SLOW_ROOM: &str = "assemblies/knight-lore/Knight Lore 128 slow room.szx";
+
+/// The room the played build was seen to slow down in, saved from the
+/// emulator, as busy_machine takes a room: the screen, the variables and
+/// objects, and the buffer where the original keeps it.
+fn slow_room() -> Option<Vec<u8>> {
+    if !have(&[SLOW_ROOM, PLAYED_MAP]) {
+        return None;
+    }
+    let slow = machine(SLOW_ROOM);
+    let mut sna = vec![0u8; 27 + 0xC000];
+    for a in 0x4000..OBJECTS_END {
+        sna[27 + usize::from(a) - 0x4000] = slow.bus.peek_raw(a);
+    }
+    let buffer = address(PLAYED_MAP, "buffer");
+    for i in 0..0x1800u16 {
+        sna[27 + 0xD8F3 - 0x4000 + usize::from(i)] = slow.bus.peek_raw(buffer + i);
+    }
+    Some(sna)
+}
+
+// The point of going back one step: the drawing order's pair tests grow with
+// the square of what is drawn, and beginning again after every draw tested the
+// same pairs over. Measured standing still, passes in 1,000 frames: the busy
+// rooms 244, 198 and 262 became 265, 203 and 274, the first room stayed at
+// 444, and the room the played build slowed down in went from 179 to 193.
+#[test]
+fn going_back_one_step_is_faster_where_much_is_drawn() {
+    if !have_still_rooms(&[MEMORY3, MEMORY3_MAP, MEMORY, MEMORY_MAP]) {
+        return;
+    }
+    let before = still_speeds(MEMORY3, MEMORY3_MAP, 1);
+    let after = still_speeds(MEMORY, MEMORY_MAP, 1);
+    for (i, (b, a)) in before.iter().zip(&after).enumerate() {
+        assert!(
+            a >= b,
+            "room {i}: {a} passes against {b}; all {before:?} and {after:?}"
+        );
+    }
+    let (b, a) = (
+        before[..3].iter().map(|x| u32::from(*x)).sum::<u32>(),
+        after[..3].iter().map(|x| u32::from(*x)).sum::<u32>(),
+    );
+    assert!(
+        a * 100 >= b * 103,
+        "{a} passes in the busy rooms against {b}"
+    );
+    if let Some(sna) = slow_room() {
+        let speed = |snap: &str, map: &str| {
+            let mut spec = busy_machine(&sna, snap, map);
+            let t = spec.bus.model.frame_t();
+            let before = passes(&spec);
+            for _ in 0..1_000 {
+                spec.run(t);
+            }
+            passes(&spec).wrapping_sub(before)
+        };
+        let (b, a) = (speed(MEMORY3, MEMORY3_MAP), speed(MEMORY, MEMORY_MAP));
+        assert!(
+            u32::from(a) * 100 >= u32::from(b) * 105,
+            "the slow room: {a} passes against {b}"
         );
     }
 }

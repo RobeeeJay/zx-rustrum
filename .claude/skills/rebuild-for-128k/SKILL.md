@@ -245,6 +245,13 @@ start or end of a game. Then `banked.py`, a step at a time, each behind
   took the buffer address of a number's bottom row. Read what each routine does
   with HL before calling a constant a position, and play to the screens nothing
   else reaches (the end of a game) in both builds.
+- **Keep interrupts off in any harness that counts entries to a routine the
+  sprite drawer runs under.** It turns them on after a sprite's first row, and
+  one taken with PC at the entry comes back to it and counts twice. Both games'
+  drawing-order tests fell into this.
+- **Keep spare room only where a later step adds**, not a flat amount in every
+  region: on Knight Lore sixteen bytes a region was more than the next step
+  could spare, and pacing needs twelve in one piece and four before one label.
 - **The algorithms can come before the banks.** Knight Lore did the depth test
   and row clipping (code only, in place) before the exchange, and the exchange
   then only had to move code. Order the changes that need memory last. Leave
