@@ -490,6 +490,7 @@ fn every_build_plays_the_same_game_in_busy_rooms() {
         (STAGE1, STAGE1_MAP),
         (BANKED, BANKED_MAP),
         (AY_FREE, AY_FREE_MAP),
+        (FAST, FAST_MAP),
     ];
     let mut need: Vec<String> = BUSY
         .iter()
@@ -541,4 +542,263 @@ fn every_build_plays_the_same_game_in_busy_rooms() {
         changed > 60,
         "{changed} bytes of the objects changed in all three rooms"
     );
+}
+
+const FAST: &str = "assemblies/knight-lore/out/fast fixed.szx";
+const FAST_MAP: &str = "assemblies/knight-lore/out/fast fixed.map";
+
+/// Calls `at` with BC, DE and HL set, as `call` does.
+fn call_with(spec: &mut Spectrum, at: u16, bc: u16, de: u16, hl: u16) {
+    spec.cpu.b = (bc >> 8) as u8;
+    spec.cpu.c = bc as u8;
+    spec.cpu.d = (de >> 8) as u8;
+    spec.cpu.e = de as u8;
+    spec.cpu.h = (hl >> 8) as u8;
+    spec.cpu.l = hl as u8;
+    call(spec, at);
+}
+
+// Stage 4 makes the drawing cheaper with Alien 8's changes where Knight Lore's
+// routines are the same (copy_rect, the sound queue's running total, the scan
+// that marks what to redraw), and takes interrupts inside sprites. None of
+// it may change the game.
+#[test]
+fn the_fast_build_plays_the_same_game_pass_for_pass() {
+    if !have(&[AY_FREE, AY_FREE_MAP, FAST, FAST_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let ay = play_by_pass(AY_FREE, AY_FREE_MAP, 300);
+    let fast = play_by_pass(FAST, FAST_MAP, 300);
+    assert_eq!(
+        first_difference(&ay, &fast),
+        None,
+        "walking from the start of a game"
+    );
+}
+
+// copy_rect works up the screen from a rectangle's bottom line, and a row
+// ending at the right-hand edge on the last line of a third carries into D as
+// the LDIs count on, which play rarely does. Every column, width up to ten and
+// several bottoms are copied by both builds' copy_rect and the screens compared.
+#[test]
+fn copy_rect_copies_every_rectangle_as_the_old_one_did() {
+    if !have(&[AY_FREE, AY_FREE_MAP, FAST, FAST_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let mut old = machine(AY_FREE);
+    let mut new = machine(FAST);
+    let (at_old, at_new) = (
+        address(AY_FREE_MAP, "copy_rect"),
+        address(FAST_MAP, "copy_rect"),
+    );
+    let (buf_old, buf_new) = (address(AY_FREE_MAP, "buffer"), address(FAST_MAP, "buffer"));
+    for (spec, buffer) in [(&mut old, buf_old), (&mut new, buf_new)] {
+        for i in 0..0x1800u16 {
+            spec.bus
+                .poke(buffer + i, (i.wrapping_mul(97) >> 3) as u8 ^ (i as u8));
+        }
+    }
+    let screen =
+        |x: u16, y: u16| 0x4000 | ((y & 0xC0) << 5) | ((y & 0x07) << 8) | ((y & 0x38) << 2) | x;
+    let mut tried = 0;
+    for x in 0..32u16 {
+        for width in 1..=(32 - x).min(10) {
+            for (bottom, rows) in [
+                (7u16, 8u16),
+                (63, 20),
+                (64, 1),
+                (191, 30),
+                (127, 9),
+                (100, 13),
+                (130, 40),
+                (66, 3),
+                (191, 192),
+            ] {
+                let row = (191 - bottom) * 32 + x;
+                let (bc, de) = (rows << 8 | width, screen(x, bottom));
+                for i in 0x4000..0x5800u16 {
+                    old.bus.poke(i, 0);
+                    new.bus.poke(i, 0);
+                }
+                call_with(&mut old, at_old, bc, de, buf_old + row);
+                call_with(&mut new, at_new, bc, de, buf_new + row);
+                tried += 1;
+                if let Some(a) =
+                    (0x4000..0x5800u16).find(|a| old.bus.peek_raw(*a) != new.bus.peek_raw(*a))
+                {
+                    panic!(
+                        "{width} wide, {rows} rows up from line {bottom} at column {x}: ${a:04X} is ${:02X} and ${:02X}",
+                        old.bus.peek_raw(a),
+                        new.bus.peek_raw(a)
+                    );
+                }
+            }
+        }
+    }
+    assert!(tried > 1_000, "{tried}");
+}
+
+// ay_total stands in for walking the queue on every click, so at the end of
+// every pass it has to be what that walk would find.
+#[test]
+fn the_running_total_is_what_is_left_in_the_queue() {
+    if !have(&[FAST, FAST_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let at = |name: &str| address(FAST_MAP, name);
+    let (end_of_pass, head, tail, queue, total) = (
+        at("end_of_pass"),
+        at("ay_head"),
+        at("ay_tail"),
+        at("ay_queue"),
+        at("ay_total"),
+    );
+    // The route play_on walks, which keeps the game going for 300 passes:
+    // another one ends at pass 284 with the game sat in read_keys.
+    let mut spec = machine(FAST);
+    start_a_game(&mut spec);
+    let (mut checked, mut sounding, mut steps, mut last) = (0, 0, 0u64, None);
+    while checked < 300 {
+        let walking = WALK[checked / 30 % WALK.len()];
+        for (r, b) in WALK {
+            key(&mut spec, r, b, (r, b) == walking);
+        }
+        spec.step_instruction();
+        steps += 1;
+        assert!(
+            steps < 2_000_000_000,
+            "the game stopped making passes after {checked}, at ${:04X}",
+            spec.cpu.pc
+        );
+        let count = passes(&spec);
+        if spec.cpu.pc != end_of_pass || count < FIRST_PASS || last == Some(count) {
+            continue;
+        }
+        last = Some(count);
+        let peek = |a: u16| spec.bus.peek_raw(a);
+        let (h, t) = (peek(head), peek(tail));
+        let mut sum = 0u32;
+        let mut i = h;
+        while i != t {
+            let entry = queue + u16::from(i);
+            sum += u32::from(peek(entry + 2)) | u32::from(peek(entry + 3)) << 8;
+            i = i.wrapping_add(4);
+        }
+        let kept = u32::from(peek(total)) | u32::from(peek(total + 1)) << 8;
+        assert_eq!(
+            kept,
+            sum.min(0xFFFF),
+            "pass {checked}: the queue holds {sum} units, ay_total says {kept}"
+        );
+        checked += 1;
+        sounding += usize::from(h != t);
+    }
+    assert!(sounding > 20, "only {sounding} passes had anything queued");
+}
+
+/// Over 1,000 frames walking from the first pass: how many frames had their
+/// interrupt reach ay_tick, and how many of those came from inside a sprite,
+/// told by the SP ay_int saved being off the game's stack ($5B00-$5BA1).
+fn interrupts_in_1000_frames(snap: &str, map: &str) -> (usize, usize) {
+    let tick = address(map, "ay_tick");
+    let saved = MAPS_WITH_AY_INT
+        .contains(&map)
+        .then(|| address(map, "ay_int_sp"));
+    let mut spec = at_first_pass(snap, map);
+    let (mut taken, mut in_sprites) = (0, 0);
+    for f in 0..1_000 {
+        let (row, bit) = WALK[f / 25 % WALK.len()];
+        for (r, b) in WALK {
+            key(&mut spec, r, b, (r, b) == (row, bit));
+        }
+        let frame = spec.bus.frame;
+        let mut got = false;
+        while spec.bus.frame == frame {
+            spec.step_instruction();
+            if spec.cpu.pc == tick && !got {
+                got = true;
+                if let Some(saved) = saved {
+                    let from = u16::from_le_bytes([
+                        spec.bus.peek_raw(saved),
+                        spec.bus.peek_raw(saved + 1),
+                    ]);
+                    in_sprites += usize::from(!(0x5B00..0x5BA2).contains(&from));
+                }
+            }
+        }
+        taken += usize::from(got);
+    }
+    (taken, in_sprites)
+}
+
+const MAPS_WITH_AY_INT: [&str; 1] = [FAST_MAP];
+
+// The drawer reads a sprite with POP, SP inside it, and the AY-free build had
+// interrupts off for the whole sprite, so nearly a third of frames had no
+// interrupt: the sound ran late and the pacing would count frames short. The
+// handler now runs on a stack of its own and writes back the two bytes the
+// last POP read, so interrupts are taken inside sprites. Nearly every frame
+// has to have its interrupt, some taken inside a sprite; that nothing drawn
+// is spoiled is the pass-for-pass tests' to say.
+#[test]
+fn interrupts_are_taken_inside_sprites_and_none_are_lost() {
+    if !have(&[AY_FREE, AY_FREE_MAP, FAST, FAST_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let (before, _) = interrupts_in_1000_frames(AY_FREE, AY_FREE_MAP);
+    let (taken, in_sprites) = interrupts_in_1000_frames(FAST, FAST_MAP);
+    // Measured: 701 before, 965 after (Alien 8's took 978). The rest come
+    // while a sprite's first row is read, before DE holds anything to put
+    // back, or while ay_append or the driver itself has them off.
+    assert!(
+        before < 850,
+        "the AY-free build took {before} of 1,000, so this measures nothing"
+    );
+    assert!(
+        taken >= 950,
+        "{taken} interrupts in 1,000 frames, against {before} before ({in_sprites} in sprites)"
+    );
+    assert!(
+        in_sprites > 50,
+        "only {in_sprites} were taken inside a sprite"
+    );
+}
+
+/// Passes made in 1,000 frames from a busy room, keys left alone.
+fn passes_in_1000_frames(sna: &[u8], snap: &str, map: &str) -> u16 {
+    let mut spec = busy_machine(sna, snap, map);
+    let t = spec.bus.model.frame_t();
+    let before = passes(&spec);
+    for _ in 0..1_000 {
+        spec.run(t);
+    }
+    passes(&spec).wrapping_sub(before)
+}
+
+// Stage 4 bought the interrupts back, and almost nothing in speed: in the
+// busy rooms the AY-free build made 209, 179 and 207 passes in 1,000 frames
+// and this one 209, 180 and 207. copy_rect saves 1% of the time; walking
+// the slots with HL saves nothing when 38 to 40 of them are live; and taking
+// interrupts inside sprites costs about what copy_rect saves. Alien 8's
+// gain was mostly depth_order, which Knight Lore's pair test does not take.
+// So what is asked here is only that it is not slower.
+#[test]
+fn the_fast_build_is_no_slower_in_busy_rooms() {
+    let mut need: Vec<String> = BUSY
+        .iter()
+        .map(|f| format!("assemblies/knight-lore/out/busy{f}.sna"))
+        .collect();
+    need.extend([AY_FREE, AY_FREE_MAP, FAST, FAST_MAP, "roms/128.rom"].map(String::from));
+    if !have(&need.iter().map(String::as_str).collect::<Vec<_>>()) {
+        return;
+    }
+    for frame in BUSY {
+        let sna = std::fs::read(format!("assemblies/knight-lore/out/busy{frame}.sna")).unwrap();
+        let before = passes_in_1000_frames(&sna, AY_FREE, AY_FREE_MAP);
+        let after = passes_in_1000_frames(&sna, FAST, FAST_MAP);
+        assert!(
+            after >= before,
+            "from frame {frame}: {after} passes in 1,000 frames against {before}"
+        );
+    }
 }

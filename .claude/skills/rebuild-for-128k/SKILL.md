@@ -188,6 +188,18 @@ last POP read, which nothing touches between POPs) and returns through a jump it
 writes itself. Before a sprite's first POP, DE holds something else, so
 interrupts come back on at the end of its first row.
 
+**Profile this game before carrying another game's changes over.** On Knight
+Lore, the same engine, Alien 8's copy, marking and interrupt changes went in
+cleanly and bought no speed at all in the busy rooms (209 passes against 209):
+the copy saved 1%, the mark scan saves only on empty slots and those rooms had
+38 to 40 live ones, and taking interrupts inside sprites costs about what the
+copy saves. Alien 8's gain had been mostly the pair loop, whose code differs in
+Knight Lore. Keep the stage for the interrupts (701 to 965 of 1,000 frames)
+and write the speed test as "no slower" if that is what was measured. When
+profiling by nearest label in a banked build, leave out every label of the
+banked sections, not only the renamed ones: routines moved into a bank keep
+their internal labels, and they share addresses with fixed code.
+
 ### 5. Paced
 
 `fast.py --paced`: the busy-wait that was the game's only pacing becomes a wait
