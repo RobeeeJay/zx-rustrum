@@ -2156,18 +2156,6 @@ fn a_later_pass_cuts_off_only_its_own_channel() {
 const TAPE: &str = "assemblies/Alien 8 AY banked.tap";
 const PLAYED_START: &str = "assemblies/Alien 8 AY banked start.szx";
 
-/// The blocks of a .tap as they are on it: flag, data, checksum each.
-fn tap_blocks(tap: &[u8]) -> Vec<Vec<u8>> {
-    let mut out = Vec::new();
-    let mut at = 0;
-    while at + 2 <= tap.len() {
-        let n = usize::from(u16::from_le_bytes([tap[at], tap[at + 1]]));
-        out.push(tap[at + 2..at + 2 + n].to_vec());
-        at += 2 + n;
-    }
-    out
-}
-
 /// A 128K that has loaded `TAPE` through its Tape Loader, stopped as the
 /// loader jumps to game_start: with each block handed to the ROM's LD-BYTES
 /// whole, as the emulator's fastload does, or `played` at the ROM's speed.
@@ -2258,17 +2246,24 @@ fn starts_as_the_snapshot_does(tape: Spectrum) {
             .collect::<Vec<u8>>()
     };
     differs("$5B00-$BFFF", &main(&tape), &main(&snap));
-    let blocks = tap_blocks(&std::fs::read(TAPE).unwrap());
-    // Headers and BASIC, the screen, then banks 1, 3, 4, 6, 7 and 0.
-    let banks = &blocks[4..10];
-    for (bank, block) in [1usize, 3, 4, 6, 7, 0].iter().zip(banks) {
-        let mut length = block.len() - 2;
-        if *bank == 0 {
-            length = 0xF840 - 0xC000; // Stage 2 is past this.
+    // Each bank as far as the game has anything in it, from the snapshot.
+    // Taken from the tape's own blocks, as it first was, a block cut short
+    // compared short and passed (Knight Lore's tape test found that).
+    for bank in [1usize, 3, 4, 6, 7, 0] {
+        let mut length = (0..0x4000u16)
+            .rev()
+            .find(|o| snap.bus.bank_byte(bank, *o) != 0)
+            .map_or(0, |o| o + 1);
+        if bank == 0 {
+            length = length.min(0xF840 - 0xC000); // Stage 2 is past this.
         }
+        assert!(
+            length > 0x1000,
+            "bank {bank} of the snapshot holds only {length:#06X} bytes"
+        );
         let read = |s: &Spectrum| {
-            (0..length as u16)
-                .map(|o| s.bus.bank_byte(*bank, o))
+            (0..length)
+                .map(|o| s.bus.bank_byte(bank, o))
                 .collect::<Vec<u8>>()
         };
         differs(&format!("bank {bank}"), &read(&tape), &read(&snap));
