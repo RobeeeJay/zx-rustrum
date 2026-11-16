@@ -286,6 +286,11 @@ $0556 with ROM 1 paged.
 - **Load each bank only as far as the assembler wrote** (run the assembler and
   read its banks' addresses; trailing zeros may be the game's).
 - **It needs a 128K's Tape Loader.** 48 BASIC locks the paging.
+- **If the game fills $C000-$FFFF** (Knight Lore's bank 0 is its code and
+  buffer), stage 2 has nowhere to live in what is loaded. Put it in a spare,
+  uncontended bank (6), have stage 1 copy it there, and page bank 0 in through
+  the 48K ROM's `OUT (C),A; RET` at $1E7D with the game's start pushed: check
+  those bytes in the ROM first.
 - **The loading screen** is a standard block only if the original's loader is
   the ROM's. A protected loader (Speedlock and the like) has to be run: load the
   original on a 48K at the tape's speed, and keep the screen that stood still
@@ -296,6 +301,8 @@ $0556 with ROM 1 paged.
   image, every bank as far as the game uses it, SP, $7FFD and a silent AY must
   match the start snapshot, the screen must be the loading screen, and the same
   menu must be drawn 400 frames later.
+  Take every length compared from the snapshot or the assembler, never from the
+  tape's blocks: a block cut short then compares short and passes.
 
 ## What cost time
 

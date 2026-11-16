@@ -1099,3 +1099,221 @@ fn the_paced_build_waits_for_little_in_busy_rooms() {
         );
     }
 }
+
+const ORIGINAL_TAPE: &str = "tapes/Knight Lore (1984)(Ultimate Play The Game).zip";
+
+/// The original on a 48K with its tape playing and LOAD "" typed.
+fn loading_the_original() -> Spectrum {
+    let zip = std::fs::read(ORIGINAL_TAPE).unwrap();
+    let (name, bytes) = zx_rustrum::zip::first_with_extension(&zip, &["tzx", "tap"]).unwrap();
+    let mut tape = zx_rustrum::tape::Tape::from_bytes(&name, &bytes).unwrap();
+    let mut spec = Spectrum::with_model(zx_rustrum::machine::Model::Spectrum48);
+    spec.load_rom(&std::fs::read("roms/48.rom").unwrap());
+    let t = spec.bus.model.frame_t();
+    for _ in 0..150 {
+        spec.run(t);
+    }
+    tape.play(spec.bus.total_t());
+    spec.bus.tape = Some(tape);
+    // LOAD "": J, symbol shift and P twice, ENTER.
+    for keys in [
+        &[(6usize, 3u8)][..],
+        &[(7, 1), (5, 0)],
+        &[(7, 1), (5, 0)],
+        &[(6, 0)],
+    ] {
+        for (row, bit) in keys {
+            key(&mut spec, *row, *bit, true);
+        }
+        for _ in 0..5 {
+            spec.run(t);
+        }
+        for (row, bit) in keys {
+            key(&mut spec, *row, *bit, false);
+        }
+        for _ in 0..5 {
+            spec.run(t);
+        }
+    }
+    spec
+}
+
+const LOADING_SCREEN: &str = "assemblies/knight-lore/loading screen.scr";
+
+// The rebuilt game's tape shows the original's loading screen, which can't be
+// lifted off the original tape: Speedlock 1 loads it encrypted, in turbo
+// blocks of its own, and puts it on the screen all at once (frame 1,617, as
+// block 135 is reached). So the original is loaded on a 48K at the tape's
+// speed, and the screen kept is the one that stood still while the last
+// block went in (6,093 frames), as it was the frame before the game first
+// drew over it. Written for assemblies/tap.py; run by build.sh.
+#[test]
+#[ignore]
+fn keep_the_original_loading_screen() {
+    if !have(&[ORIGINAL_TAPE, "roms/48.rom"]) {
+        return;
+    }
+    let mut spec = loading_the_original();
+    let t = spec.bus.model.frame_t();
+    let screen = |s: &Spectrum| {
+        (0x4000..0x5B00u16)
+            .map(|a| s.bus.peek_raw(a))
+            .collect::<Vec<u8>>()
+    };
+    let block = |s: &Spectrum| s.bus.tape.as_ref().map_or(0, |t| t.block);
+    let (mut last, mut since, mut from) = (screen(&spec), spec.bus.frame, 0usize);
+    for _ in 0..20_000 {
+        spec.run(t);
+        let now = screen(&spec);
+        if now != last {
+            let quiet = spec.bus.frame - since;
+            if quiet > 200 && from >= 135 && last[0x1800..].iter().any(|b| *b != last[0x1800]) {
+                std::fs::write(LOADING_SCREEN, &last).unwrap();
+                eprintln!(
+                    "the screen of frame {}, still for {quiet} frames",
+                    spec.bus.frame - 1
+                );
+                return;
+            }
+            since = spec.bus.frame;
+            from = block(&spec);
+        }
+        last = now;
+    }
+    panic!("no screen stood still after block 135 in 20,000 frames");
+}
+
+const TAPE: &str = "assemblies/knight-lore/Knight Lore 128.tap";
+const PLAYED: &str = "assemblies/knight-lore/Knight Lore paced.szx";
+const PLAYED_MAP: &str = "assemblies/knight-lore/Knight Lore paced.map";
+
+/// A 128K that has loaded `TAPE` through its Tape Loader, stopped as the
+/// loader's last instruction, a RET in the ROM, lands on game_start: each
+/// block handed to the ROM's LD-BYTES whole, as fastload does, or `played`
+/// at the ROM's speed.
+fn loaded_from_tape(played: bool) -> Spectrum {
+    let mut spec = Spectrum::with_model(zx_rustrum::machine::Model::Spectrum128);
+    spec.load_rom(&std::fs::read("roms/128.rom").unwrap());
+    let mut tape = zx_rustrum::tape::Tape::from_bytes(TAPE, &std::fs::read(TAPE).unwrap()).unwrap();
+    tape.play(0);
+    spec.bus.tape = Some(tape);
+    spec.bus.tape_flash = !played;
+    let t = spec.bus.model.frame_t();
+    for _ in 0..120 {
+        spec.run(t);
+    }
+    // ENTER on the menu's first line, the Tape Loader.
+    key(&mut spec, 6, 0, true);
+    for _ in 0..5 {
+        spec.run(t);
+    }
+    key(&mut spec, 6, 0, false);
+    let game_start = address(PLAYED_MAP, "game_start");
+    for _ in 0..5_000_000_000u64 {
+        if spec.cpu.pc == game_start && spec.bus.page_reg & 7 == 0 {
+            return spec;
+        }
+        spec.step_instruction();
+    }
+    panic!("the tape never got to game_start; PC ${:04X}", spec.cpu.pc);
+}
+
+// The rebuilt game as a tape that loads through the ROM, which has to start
+// the game as the snapshot does: the image from the stack up, all of bank 0
+// (the game's code and buffer, so stage 2 lives in bank 6 and pages bank 0
+// in through the ROM's OUT and RET), bank 3 as far as the game has anything
+// in it, SP, IY, the paging and a silent AY. The screen is the loading
+// screen, which the game clears.
+#[test]
+fn the_tape_starts_the_game_as_the_snapshot_does() {
+    if !have(&[TAPE, PLAYED, PLAYED_MAP, "roms/128.rom"]) {
+        return;
+    }
+    starts_as_the_snapshot_does(loaded_from_tape(false));
+}
+
+// The same at the ROM's speed: fastload hands each block over without the
+// ROM's routine running, so only this shows the loader living with it, its
+// EI as it returns and the bank changing under it between blocks.
+#[test]
+fn the_tape_loads_at_the_roms_own_speed() {
+    if !have(&[TAPE, PLAYED, PLAYED_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let tape = loaded_from_tape(true);
+    assert!(
+        tape.bus.frame > 15_000,
+        "loaded in {} frames: that was not at the ROM's speed",
+        tape.bus.frame
+    );
+    starts_as_the_snapshot_does(tape);
+}
+
+fn starts_as_the_snapshot_does(tape: Spectrum) {
+    if let Ok(kept) = std::fs::read(LOADING_SCREEN) {
+        let shown: Vec<u8> = (0x4000..0x5B00u16).map(|a| tape.bus.peek_raw(a)).collect();
+        if let Some(i) = shown.iter().zip(&kept).position(|(a, b)| a != b) {
+            panic!(
+                "the loading screen: byte {i:#06X} is ${:02X} and the original's ${:02X}",
+                shown[i], kept[i]
+            );
+        }
+    }
+    let snap = machine(PLAYED);
+    let differs = |what: &str, a: &[u8], b: &[u8]| {
+        if let Some(i) = a.iter().zip(b).position(|(x, y)| x != y) {
+            panic!(
+                "{what}: byte {i:#06X} is ${:02X} from the tape and ${:02X} in the snapshot",
+                a[i], b[i]
+            );
+        }
+    };
+    // Below SP is the stack's: the loader's last return address is there.
+    let main = |s: &Spectrum| {
+        (STACK_TOP..0xC000u16)
+            .map(|a| s.bus.peek_raw(a))
+            .collect::<Vec<u8>>()
+    };
+    differs("$5BA0-$BFFF", &main(&tape), &main(&snap));
+    let bank = |s: &Spectrum, n: usize, length: u16| {
+        (0..length)
+            .map(|o| s.bus.bank_byte(n, o))
+            .collect::<Vec<u8>>()
+    };
+    differs("bank 0", &bank(&tape, 0, 0x4000), &bank(&snap, 0, 0x4000));
+    // Bank 3 as far as the game has anything in it, from the snapshot: taken
+    // from the tape's block instead, a block cut short passed.
+    let length = (0..0x4000u16)
+        .rev()
+        .find(|o| snap.bus.bank_byte(3, *o) != 0)
+        .map_or(0, |o| o + 1);
+    assert!(
+        length > 0x0E00,
+        "bank 3 of the snapshot holds only {length:#06X} bytes"
+    );
+    differs("bank 3", &bank(&tape, 3, length), &bank(&snap, 3, length));
+    assert_eq!(
+        (tape.cpu.sp, tape.cpu.iy, tape.bus.page_reg, tape.cpu.iff1),
+        (STACK_TOP, 0x5C3A, 0x10, false),
+        "SP, IY, $7FFD and interrupts as the game starts"
+    );
+    assert_eq!(tape.bus.audio.ay.regs[..14], [0u8; 14], "the AY silent");
+    // And from there it is the same game: the menu it draws over the loading
+    // screen on one and a blank screen on the other is the same.
+    let (mut tape, mut snap) = (tape, snap);
+    let t = tape.bus.model.frame_t();
+    for _ in 0..400 {
+        tape.run(t);
+        snap.run(t);
+    }
+    let screen = |s: &Spectrum| {
+        (0x4000..0x5B00u16)
+            .map(|a| s.bus.peek_raw(a))
+            .collect::<Vec<u8>>()
+    };
+    assert!(
+        screen(&snap).iter().any(|b| *b != 0),
+        "the snapshot drew nothing in 400 frames"
+    );
+    differs("the menu after 400 frames", &screen(&tape), &screen(&snap));
+}
