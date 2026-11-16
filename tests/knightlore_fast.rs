@@ -494,6 +494,7 @@ fn every_build_plays_the_same_game_in_busy_rooms() {
         (DRAWING1, DRAWING1_MAP),
         (DRAWING, DRAWING_MAP),
         (MEMORY1, MEMORY1_MAP),
+        (MEMORY2, MEMORY2_MAP),
         (MEMORY, MEMORY_MAP),
     ];
     let mut need: Vec<String> = BUSY
@@ -1283,7 +1284,7 @@ fn starts_as_the_snapshot_does(tape: Spectrum) {
     differs("$5BA0-$BFFF", &main(&tape), &main(&snap));
     // Each bank as far as the game has anything in it, from the snapshot:
     // taken from the tape's blocks instead, a block cut short passed.
-    for n in [0usize, 3, 4] {
+    for n in [0usize, 1, 3, 4, 7] {
         let length = (0..0x4000u16)
             .rev()
             .find(|o| snap.bus.bank_byte(n, *o) != 0)
@@ -1461,19 +1462,19 @@ fn the_end_of_a_game_is_printed_in_the_same_places() {
     }
 }
 
-const MEMORY: &str = "assemblies/knight-lore/out/memory fixed.szx";
-const MEMORY_MAP: &str = "assemblies/knight-lore/out/memory fixed.map";
+const MEMORY2: &str = "assemblies/knight-lore/out/memory2 fixed.szx";
+const MEMORY2_MAP: &str = "assemblies/knight-lore/out/memory2 fixed.map";
 
 // memory.py's second step keeps a mirrored copy of every sprite in bank 4 at
 // the same address, and pages in whichever faces the right way instead of
 // mirroring a sprite in place. What is drawn has to be the same.
 #[test]
 fn drawing_from_mirrored_copies_plays_the_same_game() {
-    if !have(&[MEMORY1, MEMORY1_MAP, MEMORY, MEMORY_MAP, "roms/128.rom"]) {
+    if !have(&[MEMORY1, MEMORY1_MAP, MEMORY2, MEMORY2_MAP, "roms/128.rom"]) {
         return;
     }
     let before = play_by_pass(MEMORY1, MEMORY1_MAP, 300);
-    let after = play_by_pass(MEMORY, MEMORY_MAP, 300);
+    let after = play_by_pass(MEMORY2, MEMORY2_MAP, 300);
     assert_eq!(
         first_difference(&before, &after),
         None,
@@ -1487,10 +1488,10 @@ fn drawing_from_mirrored_copies_plays_the_same_game() {
 // with bank 4 byte for byte.
 #[test]
 fn every_mirrored_copy_is_what_the_game_would_have_made() {
-    if !have(&[MEMORY1, MEMORY1_MAP, MEMORY, MEMORY_MAP, "roms/128.rom"]) {
+    if !have(&[MEMORY1, MEMORY1_MAP, MEMORY2, MEMORY2_MAP, "roms/128.rom"]) {
         return;
     }
-    let mirrored = machine(MEMORY);
+    let mirrored = machine(MEMORY2);
     let fresh = machine(MEMORY1);
     let table = address(MEMORY1_MAP, "sprite_table");
     let mut sprites: Vec<u16> = (0..188u16)
@@ -1532,11 +1533,11 @@ fn every_mirrored_copy_is_what_the_game_would_have_made() {
 // little, stayed at 241 and 196, and so did the first room standing still.
 #[test]
 fn drawing_from_mirrored_copies_is_faster_where_sprites_turn() {
-    if !have_still_rooms(&[MEMORY1, MEMORY1_MAP, MEMORY, MEMORY_MAP]) {
+    if !have_still_rooms(&[MEMORY1, MEMORY1_MAP, MEMORY2, MEMORY2_MAP]) {
         return;
     }
     let before = still_speeds(MEMORY1, MEMORY1_MAP, 1);
-    let after = still_speeds(MEMORY, MEMORY_MAP, 1);
+    let after = still_speeds(MEMORY2, MEMORY2_MAP, 1);
     assert!(
         u32::from(after[2]) * 100 >= u32::from(before[2]) * 110,
         "from frame 91,000: {} passes against {}; all {before:?} and {after:?}",
@@ -1558,11 +1559,11 @@ fn drawing_from_mirrored_copies_is_faster_where_sprites_turn() {
 // emptied first, then made, and compared with the image's.
 #[test]
 fn build_tables_still_makes_the_shift_tables() {
-    if !have(&[MEMORY, MEMORY_MAP, "roms/128.rom"]) {
+    if !have(&[MEMORY2, MEMORY2_MAP, "roms/128.rom"]) {
         return;
     }
-    let mut spec = machine(MEMORY);
-    let at = address(MEMORY_MAP, "shift_tables");
+    let mut spec = machine(MEMORY2);
+    let at = address(MEMORY2_MAP, "shift_tables");
     let kept: Vec<u8> = (at..0x9000).map(|a| spec.bus.peek_raw(a)).collect();
     assert!(
         kept.iter().any(|b| *b != 0xFF),
@@ -1571,7 +1572,7 @@ fn build_tables_still_makes_the_shift_tables() {
     for a in at..0x9000 {
         spec.bus.poke(a, 0);
     }
-    call(&mut spec, address(MEMORY_MAP, "build_tables"));
+    call(&mut spec, address(MEMORY2_MAP, "build_tables"));
     let made: Vec<u8> = (at..0x9000).map(|a| spec.bus.peek_raw(a)).collect();
     if let Some(i) = made.iter().zip(&kept).position(|(m, k)| m != k) {
         panic!(
@@ -1581,4 +1582,127 @@ fn build_tables_still_makes_the_shift_tables() {
             kept[i]
         );
     }
+}
+
+const MEMORY: &str = "assemblies/knight-lore/out/memory fixed.szx";
+const MEMORY_MAP: &str = "assemblies/knight-lore/out/memory fixed.map";
+
+// memory.py's third step draws a sprite already shifted, where banks 1 and 7
+// hold a copy, by the aligned path instead of shifting it as it goes. What is
+// drawn has to be the same.
+#[test]
+fn drawing_sprites_already_shifted_plays_the_same_game() {
+    if !have(&[MEMORY2, MEMORY2_MAP, MEMORY, MEMORY_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let before = play_by_pass(MEMORY2, MEMORY2_MAP, 300);
+    let after = play_by_pass(MEMORY, MEMORY_MAP, 300);
+    assert_eq!(
+        first_difference(&before, &after),
+        None,
+        "walking from the start of a game"
+    );
+}
+
+// Every object type at every shift, facing both ways, drawn over a pattern and
+// over all ones by step 2 and by step 3, and the buffers compared. All ones is
+// there because a picture bit outside its mask only shows over a set bit: the
+// shifted path XORs the picture in and the aligned path ORs it. The draws a
+// copy should serve are counted from step 3's directories, 469 of them, so the
+// test can't pass by never using one.
+#[test]
+fn every_sprite_draws_the_same_from_a_copy_already_shifted() {
+    if !have(&[MEMORY2, MEMORY2_MAP, MEMORY, MEMORY_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let mut old = at_first_pass(MEMORY2, MEMORY2_MAP);
+    let mut new = at_first_pass(MEMORY, MEMORY_MAP);
+    let table = address(MEMORY_MAP, "sprite_table");
+    let (types, slots) = (0xFD00u16, 0xFDC0u16);
+    let mut served = 0;
+    for kind in 0..188u16 {
+        let sprite = u16::from_le_bytes([
+            new.bus.peek_raw(table + 2 * kind),
+            new.bus.peek_raw(table + 2 * kind + 1),
+        ]);
+        let stored = new.bus.bank_byte(0, sprite - 0xC000);
+        if stored & 0x0F == 0 {
+            continue;
+        }
+        for shift in 0..8u8 {
+            for flags in [0u8, 0x40] {
+                // Which copy the object gets: bank 4's if it wants the other way.
+                let bank = if (stored ^ flags) & 0x40 != 0 { 4 } else { 0 };
+                let slot = new.bus.bank_byte(bank, types - 0xC000 + kind);
+                if shift > 0 && slot > 0 {
+                    let o = slots - 0xC000 + 16 * (u16::from(slot) - 1) + 2 * u16::from(shift);
+                    served += usize::from(
+                        new.bus.bank_byte(bank, o) | new.bus.bank_byte(bank, o + 1) != 0,
+                    );
+                }
+                for ones in [false, true] {
+                    let mut after = Vec::new();
+                    for (spec, map) in [(&mut old, MEMORY2_MAP), (&mut new, MEMORY_MAP)] {
+                        let buffer = address(map, "buffer");
+                        for i in 0..0x1800u16 {
+                            let b = if ones {
+                                0xFF
+                            } else {
+                                (i.wrapping_mul(37) ^ (i >> 5)) as u8
+                            };
+                            spec.bus.poke(buffer + i, b);
+                        }
+                        let ix = address(map, "l_BFDB");
+                        spec.cpu.ix = ix;
+                        spec.bus.poke(ix, kind as u8);
+                        spec.bus.poke(ix + 7, flags);
+                        spec.bus.poke(ix + 0x1A, 0x40 + shift);
+                        spec.bus.poke(ix + 0x1B, 0x40);
+                        call(spec, address(map, "draw_sprite"));
+                        after.push(
+                            (0..0x1800u16)
+                                .map(|i| spec.bus.peek_raw(buffer + i))
+                                .collect::<Vec<u8>>(),
+                        );
+                    }
+                    if let Some(i) = after[0].iter().zip(&after[1]).position(|(a, b)| a != b) {
+                        panic!(
+                            "type {kind:#04X} shift {shift} flags {flags:#04X} over {}: buffer byte {i:#06X} is ${:02X} shifted and ${:02X} from the copy",
+                            if ones { "ones" } else { "the pattern" },
+                            after[0][i],
+                            after[1][i]
+                        );
+                    }
+                }
+            }
+        }
+    }
+    assert!(served > 400, "only {served} draws had a copy to come from");
+}
+
+// What the copies are worth, standing still: 241, 196, 261 and 439 passes in
+// 1,000 frames became 243, 199, 263 and 447, 1.3% together. Less than the
+// 2.3% the copies' share of the shifted bytes promised: banks 1 and 7 are
+// contended, and every shifted draw now looks in the directory first.
+#[test]
+fn drawing_sprites_already_shifted_is_a_little_faster() {
+    if !have_still_rooms(&[MEMORY2, MEMORY2_MAP, MEMORY, MEMORY_MAP]) {
+        return;
+    }
+    let before = still_speeds(MEMORY2, MEMORY2_MAP, 1);
+    let after = still_speeds(MEMORY, MEMORY_MAP, 1);
+    for (i, (b, a)) in before.iter().zip(&after).enumerate() {
+        assert!(
+            a >= b,
+            "room {i}: {a} passes against {b}; all {before:?} and {after:?}"
+        );
+    }
+    let (b, a) = (
+        before.iter().map(|x| u32::from(*x)).sum::<u32>(),
+        after.iter().map(|x| u32::from(*x)).sum::<u32>(),
+    );
+    assert!(
+        a * 100 >= b * 101,
+        "{a} passes in all four rooms against {b}"
+    );
 }

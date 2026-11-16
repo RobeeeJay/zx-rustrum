@@ -253,6 +253,12 @@ start or end of a game. Then `banked.py`, a step at a time, each behind
   place for every object facing the other way; a mirrored copy of every sprite
   in bank 4 removed that, and pre-shifted copies of the sprites drawn shifted
   most (counted over the recording) filled banks 1, 6 and 7.
+- **Pre-shifted copies are worth a percent or two, not more.** Measure the
+  two paths' T-states a byte drawn and the shifted share of the time before
+  building them: on both games the saving was 1-2.5%, under the estimate, since
+  the spare banks are partly contended and every shifted draw pays for the
+  lookup. If the banks that hold the sprites have no room for a directory by
+  type and shift, a byte by type to a slot of words by shift fits in 764 bytes.
 - **Then the algorithms**, each measured, each its own step: copy the changed
   rectangles a character cell at a time; let the drawing order step back after
   each draw instead of starting again; stop the depth test at the first axis

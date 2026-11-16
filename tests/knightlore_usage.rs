@@ -307,3 +307,130 @@ fn who_reads_the_room_data() {
     std::fs::write("assemblies/knight-lore/out/room-readers.txt", &out).unwrap();
     eprint!("{out}");
 }
+
+/// The original playing its recording to the end, or until it comes adrift,
+/// calling `at` whenever it reaches one of `breakpoints`; and how many
+/// frames it played.
+fn replay_breaking(breakpoints: &[u16], mut at: impl FnMut(&mut Spectrum)) -> usize {
+    let recording = zx_rustrum::rzx::parse(&std::fs::read(RECORDING).unwrap()).unwrap();
+    let snap = recording.snapshot.clone().unwrap();
+    let mut spec = Spectrum::with_model(Model::Spectrum48);
+    spec.load_rom(&std::fs::read("roms/48.rom").unwrap());
+    zx_rustrum::snapshot::load_bytes(&mut spec, &snap.extension, &snap.data).unwrap();
+    spec.bus.playback = Some(Playback::default());
+    spec.breakpoints = breakpoints.to_vec();
+    let mut carry = 0;
+    for frame in 0..recording.len() {
+        if let Some(snapshot) = recording.snapshot_before(frame) {
+            zx_rustrum::rzx::carry_on_from(&mut spec, snapshot).unwrap();
+        }
+        let f = &recording.frames[frame];
+        let (asked, left) = zx_rustrum::rzx::owed(f.fetches.max(1) as u32, carry);
+        if let Some(playback) = &mut spec.bus.playback {
+            playback.start_frame(f.inputs.clone());
+        }
+        let (mut ask, mut done_all) = (asked, 0);
+        while ask > 0 {
+            let (stop, done) = spec.run_fetches(ask);
+            done_all += done;
+            ask = ask.saturating_sub(done);
+            match stop {
+                Stop::Breakpoint(_) => {
+                    at(&mut spec);
+                    // Off the breakpoint, or it stops there for ever.
+                    let keep = std::mem::take(&mut spec.breakpoints);
+                    let (_, done) = spec.run_fetches(1);
+                    spec.breakpoints = keep;
+                    done_all += done;
+                    ask = ask.saturating_sub(done);
+                }
+                Stop::Budget => {}
+                other => panic!("frame {frame}: stopped by {other:?}"),
+            }
+        }
+        carry = left + done_all.saturating_sub(asked);
+        spec.bus.end_frame_here();
+        spec.bus.raise_interrupt();
+        let playback = spec.bus.playback.as_ref().unwrap();
+        if playback.short > 0 || playback.unread > 0 {
+            return frame;
+        }
+    }
+    recording.len()
+}
+
+// memory.py keeps some sprites already shifted in the spare banks, and has
+// room for only some: which, by how often the original drew each sprite at
+// each shift, facing each way, over its recording. Facing is whether the
+// stored copy has been mirrored since the recording began (bit 6 of its
+// first byte), which is which of the rebuild's two copies it would come
+// from. Writes assemblies/knight-lore/out/shift-usage.txt: label, offset
+// from it, facing (0 as stored, 1 mirrored), shift, draws, bytes drawn.
+#[test]
+#[ignore]
+fn how_often_each_sprite_is_drawn_at_each_shift() {
+    let map = "assemblies/knight-lore/out/original.map";
+    let image = "assemblies/knight-lore/out/original.bin";
+    if [RECORDING, map, image, "roms/48.rom"]
+        .iter()
+        .any(|f| std::fs::metadata(f).is_err())
+    {
+        return;
+    }
+    let mut labels: Vec<(u16, String)> = std::fs::read_to_string(map)
+        .unwrap()
+        .lines()
+        .filter_map(|l| {
+            let f: Vec<&str> = l.split_whitespace().collect();
+            (f.len() == 2).then(|| {
+                (
+                    u16::from_str_radix(&f[1][1..], 16).unwrap(),
+                    f[0].to_string(),
+                )
+            })
+        })
+        .collect();
+    labels.sort();
+    let at = |name: &str| labels.iter().find(|(_, n)| n == name).unwrap().0;
+    let sprites: Vec<(u16, String)> = labels
+        .iter()
+        .filter(|(_, n)| n.starts_with("sprite_") && n.len() == 9)
+        .cloned()
+        .collect();
+    let stored = std::fs::read(image).unwrap();
+    let mut counts = std::collections::BTreeMap::<(String, u16, u8, u8), (u64, u64)>::new();
+    let frames = replay_breaking(&[at("sprite_clipped")], |spec| {
+        let ix = spec.cpu.ix;
+        let shift = spec.bus.peek_raw(ix.wrapping_add(0x1A)) & 7;
+        if shift == 0 {
+            return;
+        }
+        // sprite_clipped comes after the width and height have been read.
+        let sprite = spec.cpu.de().wrapping_sub(2);
+        let facing = (spec.bus.peek_raw(sprite) ^ stored[usize::from(sprite - 0x5B00)]) >> 6 & 1;
+        let (base, name) = sprites.iter().rev().find(|(a, _)| *a <= sprite).unwrap();
+        let bytes = u64::from(spec.bus.peek_raw(ix.wrapping_add(0x18)))
+            * u64::from(spec.bus.peek_raw(ix.wrapping_add(0x19)));
+        let e = counts
+            .entry((name.clone(), sprite - base, facing, shift))
+            .or_insert((0, 0));
+        e.0 += 1;
+        e.1 += bytes;
+    });
+    let mut out = String::from("label offset facing shift draws bytes\n");
+    for ((name, offset, facing, shift), (draws, bytes)) in &counts {
+        out.push_str(&format!(
+            "{name} {offset} {facing} {shift} {draws} {bytes}\n"
+        ));
+    }
+    std::fs::write("assemblies/knight-lore/out/shift-usage.txt", out).unwrap();
+    eprintln!(
+        "{} sprite, facing and shift seen in {frames} frames",
+        counts.len()
+    );
+    assert!(
+        counts.len() > 50,
+        "only {} sprite, facing and shift seen",
+        counts.len()
+    );
+}
