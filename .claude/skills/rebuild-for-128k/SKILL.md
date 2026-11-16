@@ -20,7 +20,8 @@ recording.
 
 Alien 8 went through every stage here; [references/alien-8.md](references/alien-8.md)
 has its numbers, its scripts and what each stage was worth, as a worked example and a
-check on what to expect. Its scripts are in `assemblies/` (gitignored, since
+check on what to expect. Knight Lore, the same engine with no free memory, is the
+second: [references/knight-lore.md](references/knight-lore.md). Its scripts are in `assemblies/alien-8/` (gitignored, since
 they carry the game's code) and work by swapping exact passages of its
 disassembly, so **they are a pattern to copy for each game, not a tool to run on
 another one**. A game with the same engine (Knight Lore shares about two thirds
@@ -39,12 +40,21 @@ of Alien 8's code) still has its own addresses, layout and quirks.
   rather than fetching it.
 - **`roms/128.rom` and `roms/48.rom`.**
 
-Work in `assemblies/`, a script per stage beside what it makes, one shell script
+Work in a directory of the game's own under `assemblies/` (`alien-8/`,
+`knight-lore/`), a script per stage beside what it makes, one shell script
 (`build.sh`, then `fast.sh`) that remakes everything from the disassembly, and a
 test file per game (`tests/<game>_*.rs`) that skips itself when its inputs are
 absent. Write up each stage in a plan beside the scripts (Alien 8's is
-`assemblies/memory-plan.md`): what it changed, what it measured, what it cost,
-and what was wrong on the way.
+`assemblies/alien-8/memory-plan.md`, Knight Lore's `plan.md`): what it changed,
+what it measured, what it cost, and what was wrong on the way.
+
+A second game borrows the first's scripts rather than copying them: import one
+by its path (`importlib.util.spec_from_file_location`), or lift one function out
+with `ast` when its file runs a build on import, as Alien 8's `banked.py` does
+(Knight Lore's `effects.py` takes `step13` that way). So moving a game's
+directory means following every path to it — the shell scripts' variables
+(`A=`, `K=$A/...`) as well as quoted strings — and checking the move by
+rebuilding both games and comparing what comes out byte for byte.
 
 ## How every stage is checked
 
@@ -78,7 +88,23 @@ These are the habits that caught nearly every mistake. Set them up first.
   fitted the game reads the floating bus, whose value depends on timing.
 - **Rooms the user saves.** When a build is seen to slow down, the user can save
   the room; turn it into the same kind of state (`keep_the_room_...`) and add it
-  to the pass-for-pass test.
+  to the pass-for-pass test. Diagnose it before changing anything: check it is
+  the build you think (only operands the code rewrites and workspace may differ),
+  profile it by label, count the work a pass does — draws, pair tests,
+  drawing-order restarts, places cleared — beside the busy rooms', and list the
+  objects whose position changes. Knight Lore's saved room redrew 16 objects a
+  pass against 11 because a two-part enemy walked among stacked blocks, and
+  did twice the pair tests, since the order began again after every draw.
+- **Leave workspace out of a comparison only with a reason, and test what it
+  stood for.** A variable written before every read (Knight Lore's scan
+  position, `$5BCF`) can differ when a step reaches the same result another
+  way; leave it out, say why in the code, and check the result directly (the
+  drawing order, object by object).
+- **Make sure a fuzz test reaches the path it is for.** Count how often the
+  new path runs and require a floor: Knight Lore's busiest room has charms of
+  its own, piled close they were nearly always changed, and the drawing-order
+  test fell back to beginning again in almost every pile until most of them
+  were made ordinary blocks (327 steps back became 29,127).
 - **A fuzz test for anything with cases.** Random rectangles for a copy
   routine, random pairs for a depth test, random rooms of objects for a marking
   routine: each compared against the old routine, with the trials that take the
@@ -284,17 +310,16 @@ start or end of a game. Then `banked.py`, a step at a time, each behind
   overran into code, and crashed the game only on a long walk. Fill the
   handler's stack with a marker, play, and measure how far it was written,
   every time the handler grows.
-- **A tape loader needs no interrupt table if LD-BYTES never turns interrupts
-  on**: do its first steps (to $0561) yourself, push your own return, and enter
-  at $0562, past the push of SA/LD-RET, which is where the EI is. Then the
-  loader can live in any bank, contended or not, with I left uncontended.
 - **Sound on the 128K's other channels.** Tunes on A; the player's sounds on B,
   everything else's on C, each with its own small queue, a set volume with an
   attack and a release instead of the envelope. Check the volumes a frame at a
   time through the AY's registers, and say they haven't been listened to.
 
-**Memory runs out.** Keep a running account of what is free where. When a step
-doesn't fit, move code that runs only at a room change, a new life or a key
+**Memory runs out.** Keep a running account of what is free where. A step that
+makes code longer than the old layout has room for can still be made: apply it
+in the layout step, before measuring, and measure with the anchor it would
+overflow taken out (only distances between labels are used). When a step
+doesn't fit at all, move code that runs only at a room change, a new life or a key
 press to the room bank (stubs make it cost a trampoline a call), and find the
 largest free run (the tail of a sprite bank was where the last table went).
 
@@ -312,17 +337,20 @@ $0556 with ROM 1 paged.
   BC) and loads the banks; stage 2 lives in the free tail of the last bank
   loaded, loads the main image, silences the AY and starts the game exactly as
   the start snapshot does.
-- **Each stage has its own IM 2 table and an EI/RET handler.** LD-BYTES turns
-  interrupts on as it returns, and the ROM's handler would write into the game's
-  variables.
+- **Each stage needs its own IM 2 table and an EI/RET handler, or none.**
+  LD-BYTES turns interrupts on as it returns, through SA/LD-RET at $053F, and the
+  ROM's handler would write into the game's variables. A stage can avoid it: do
+  LD-BYTES's first steps itself (to $0561), push its own return, and enter at
+  $0562, past the push of SA/LD-RET. Interrupts then stay off, no table is
+  needed, I stays uncontended, and the stage can live in any bank.
 - **Load each bank only as far as the assembler wrote** (run the assembler and
   read its banks' addresses; trailing zeros may be the game's).
 - **It needs a 128K's Tape Loader.** 48 BASIC locks the paging.
-- **If the game fills $C000-$FFFF** (Knight Lore's bank 0 is its code and
-  buffer), stage 2 has nowhere to live in what is loaded. Put it in a spare,
-  uncontended bank (6), have stage 1 copy it there, and page bank 0 in through
-  the 48K ROM's `OUT (C),A; RET` at $1E7D with the game's start pushed: check
-  those bytes in the ROM first.
+- **If the last bank loaded has no tail free**, stage 2 lives somewhere the
+  last block doesn't load over (Knight Lore's: bank 3, past its room data), is
+  copied there by stage 1, and pages bank 0 in over itself through the 48K ROM's
+  `OUT (C),A; RET` at $1E7D with the game's start pushed. Check those bytes, and
+  LD-BYTES's first twelve if it enters at $0562, in the ROM first.
 - **The loading screen** is a standard block only if the original's loader is
   the ROM's. A protected loader (Speedlock and the like) has to be run: load the
   original on a 48K at the tape's speed, and keep the screen that stood still
@@ -335,6 +363,13 @@ $0556 with ROM 1 paged.
   menu must be drawn 400 frames later.
   Take every length compared from the snapshot or the assembler, never from the
   tape's blocks: a block cut short then compares short and passes.
+- **Check that Fastload was fast, and check it under the CPU turbo.** A block
+  Fastload doesn't answer is read from the pulses, which still ends in the right
+  place, only minutes later; at four times the speed the ROM can't time a pulse
+  and it never loads. Require the frame count, and load once more with turbo 4.
+  Watch for the game's start from the key press: with Fastload at 4x the whole
+  tape is in within the frames ENTER is held. ZX-Rustrum's Fastload answers
+  $0562 as well as $0556 from 1.5.0; before that a $0562 stage loaded slowly.
 
 ## What cost time
 
@@ -345,8 +380,14 @@ $0556 with ROM 1 paged.
   that ran past the first compared pass, a build-a-room test that compared a
   buffer that may now differ.
 - **The emulator, not the game.** Fastload handed two headerless blocks asked for
-  back to back as the same block; a paused window repainted at full rate. Fix
-  the emulator with a test of its own, then carry on.
+  back to back as the same block; a paused window repainted at full rate;
+  Fastload answered only $0556, so a loader entering at $0562 loaded from the
+  pulses and never at all under the turbo. Fix the emulator with a test of its
+  own, then carry on.
+- **A test that checked where it ended, not how.** Knight Lore's Fastload tape
+  test passed for a day while its biggest block loaded from the pulses in 141
+  seconds of machine time. Assert the cost (frames, passes) as well as the
+  result.
 - **Relative jumps out of range** whenever code is inserted between a JR and its
   target: make the swap use JP, or put the new code where nothing jumps across.
 - **A register the next routine needs**, clobbered by code dropped in front of
