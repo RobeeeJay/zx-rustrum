@@ -491,6 +491,7 @@ fn every_build_plays_the_same_game_in_busy_rooms() {
         (BANKED, BANKED_MAP),
         (AY_FREE, AY_FREE_MAP),
         (FAST, FAST_MAP),
+        (DRAWING1, DRAWING1_MAP),
         (DRAWING, DRAWING_MAP),
     ];
     let mut need: Vec<String> = BUSY
@@ -804,19 +805,19 @@ fn the_fast_build_is_no_slower_in_busy_rooms() {
     }
 }
 
-const DRAWING: &str = "assemblies/knight-lore/out/drawing fixed.szx";
-const DRAWING_MAP: &str = "assemblies/knight-lore/out/drawing fixed.map";
+const DRAWING1: &str = "assemblies/knight-lore/out/drawing1 fixed.szx";
+const DRAWING1_MAP: &str = "assemblies/knight-lore/out/drawing1 fixed.map";
 
 // drawing.py's first step stops the pair test as soon as one axis settles
 // it, instead of working out all three and looking the case up. It is the
 // same subtractions on the same bytes, so the game has to be the same.
 #[test]
 fn the_pair_test_that_stops_early_plays_the_same_game() {
-    if !have(&[FAST, FAST_MAP, DRAWING, DRAWING_MAP, "roms/128.rom"]) {
+    if !have(&[FAST, FAST_MAP, DRAWING1, DRAWING1_MAP, "roms/128.rom"]) {
         return;
     }
     let fast = play_by_pass(FAST, FAST_MAP, 300);
-    let drawing = play_by_pass(DRAWING, DRAWING_MAP, 300);
+    let drawing = play_by_pass(DRAWING1, DRAWING1_MAP, 300);
     assert_eq!(
         first_difference(&fast, &drawing),
         None,
@@ -865,14 +866,14 @@ fn every_scattered_room_is_drawn_in_the_same_order() {
         sna_path,
         FAST,
         FAST_MAP,
-        DRAWING,
-        DRAWING_MAP,
+        DRAWING1,
+        DRAWING1_MAP,
         "roms/128.rom",
     ]) {
         return;
     }
     let sna = std::fs::read(sna_path).unwrap();
-    let builds = [(FAST, FAST_MAP), (DRAWING, DRAWING_MAP)];
+    let builds = [(FAST, FAST_MAP), (DRAWING1, DRAWING1_MAP)];
     let mut machines: Vec<Spectrum> = builds
         .iter()
         .map(|(s, m)| busy_machine(&sna, s, m))
@@ -942,13 +943,53 @@ fn every_scattered_room_is_drawn_in_the_same_order() {
 // most where the most objects are drawn in the most overlapping places.
 #[test]
 fn the_pair_test_that_stops_early_is_faster_in_every_busy_room() {
-    let Some(speeds) = busy_speeds(&[(FAST, FAST_MAP), (DRAWING, DRAWING_MAP)]) else {
+    let Some(speeds) = busy_speeds(&[(FAST, FAST_MAP), (DRAWING1, DRAWING1_MAP)]) else {
         return;
     };
     for (frame, s) in BUSY.iter().zip(&speeds) {
         assert!(
             u32::from(s[1]) * 100 >= u32::from(s[0]) * 103,
             "from frame {frame}: {} passes against the fast build's {}; all: {speeds:?}",
+            s[1],
+            s[0]
+        );
+    }
+}
+
+const DRAWING: &str = "assemblies/knight-lore/out/drawing fixed.szx";
+const DRAWING_MAP: &str = "assemblies/knight-lore/out/drawing fixed.map";
+
+// drawing.py's second step draws only the rows of a sprite that meet a place
+// cleared this pass. What it leaves out was drawn into the buffer and never
+// copied, so the screen has to be the same, pass for pass. The walk goes
+// through three rooms (67, 69 and 68), so a room drawn whole after a door is
+// in it as well.
+#[test]
+fn drawing_only_the_rows_that_show_leaves_the_screen_the_same() {
+    if !have(&[DRAWING1, DRAWING1_MAP, DRAWING, DRAWING_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let before = play_by_pass(DRAWING1, DRAWING1_MAP, 300);
+    let after = play_by_pass(DRAWING, DRAWING_MAP, 300);
+    assert_eq!(
+        first_difference(&before, &after),
+        None,
+        "walking from the start of a game"
+    );
+}
+
+// Measured: 228, 190 and 215 passes in 1,000 frames in the busy rooms became
+// 240, 195 and 229. Alien 8 gained more from the same step (16-24%): its busy
+// rooms had more of each sprite outside the cleared places.
+#[test]
+fn drawing_only_the_rows_that_show_is_faster_in_every_busy_room() {
+    let Some(speeds) = busy_speeds(&[(DRAWING1, DRAWING1_MAP), (DRAWING, DRAWING_MAP)]) else {
+        return;
+    };
+    for (frame, s) in BUSY.iter().zip(&speeds) {
+        assert!(
+            u32::from(s[1]) * 100 >= u32::from(s[0]) * 102,
+            "from frame {frame}: {} passes against step 1's {}; all: {speeds:?}",
             s[1],
             s[0]
         );
