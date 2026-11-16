@@ -208,6 +208,13 @@ original's quickest pass was 5.2 frames; Alien 8 used 5, then 4 once the banked
 build's busy rooms were being held as well. The user decides the number; offer
 `--pace=N` to try one. This is the build for the emulator's CPU turbo.
 
+**Measure speed standing still, never walking.** With keys changing on a frame
+schedule, a faster build covers more ground in the same frames, goes through
+doors, and a room change costs more than a pass: on Knight Lore a walk said
+the unpaced build made only 261 passes at four times the speed, when standing
+in the same rooms it made 820 to 1,805. Use the busy rooms and the first room
+with the keys left alone, at 1x and 4x.
+
 ### 6. The 128K's banks
 
 Write the plan first (Alien 8's `memory-plan.md`), with a profile of what is used

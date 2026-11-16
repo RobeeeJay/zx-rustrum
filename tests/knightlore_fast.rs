@@ -995,3 +995,107 @@ fn drawing_only_the_rows_that_show_is_faster_in_every_busy_room() {
         );
     }
 }
+
+const PACED: &str = "assemblies/knight-lore/out/paced fixed.szx";
+const PACED_MAP: &str = "assemblies/knight-lore/out/paced fixed.map";
+
+// paced.py swaps the busy-wait at the end of a pass for a wait in HALT, so
+// only time changes: the game, pass for pass, must not.
+#[test]
+fn the_paced_build_plays_the_same_game() {
+    if !have(&[DRAWING, DRAWING_MAP, PACED, PACED_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let drawing = play_by_pass(DRAWING, DRAWING_MAP, 300);
+    let paced = play_by_pass(PACED, PACED_MAP, 300);
+    assert_eq!(
+        first_difference(&drawing, &paced),
+        None,
+        "walking from the start of a game"
+    );
+}
+
+/// Passes in 1,000 frames at `turbo`, keys left alone: in each busy room,
+/// then in the first room. Walking can't measure speed, since a faster build
+/// covers more ground in the same frames and goes through doors, and a room
+/// change costs more than a pass.
+fn still_speeds(snap: &str, map: &str, turbo: u32) -> Vec<u16> {
+    let mut machines: Vec<Spectrum> = BUSY
+        .iter()
+        .map(|frame| {
+            let sna = std::fs::read(format!("assemblies/knight-lore/out/busy{frame}.sna")).unwrap();
+            busy_machine(&sna, snap, map)
+        })
+        .collect();
+    machines.push(at_first_pass(snap, map));
+    machines
+        .into_iter()
+        .map(|mut spec| {
+            spec.bus.turbo = turbo;
+            let t = spec.bus.model.frame_t();
+            let before = passes(&spec);
+            for _ in 0..1_000 {
+                spec.run(t);
+            }
+            passes(&spec).wrapping_sub(before)
+        })
+        .collect()
+}
+
+fn have_still_rooms(builds: &[&str]) -> bool {
+    let mut need: Vec<String> = BUSY
+        .iter()
+        .map(|f| format!("assemblies/knight-lore/out/busy{f}.sna"))
+        .collect();
+    need.extend(builds.iter().map(|b| b.to_string()));
+    need.push("roms/128.rom".into());
+    have(&need.iter().map(String::as_str).collect::<Vec<_>>())
+}
+
+// The point of pacing: under the CPU turbo the game no longer runs away. At
+// four times the speed the unpaced build made 1,009, 820 and 854 passes in
+// 1,000 frames in the busy rooms and 1,805 standing in the first room; the
+// paced one 250 in all four, four frames a pass. Even at normal speed the
+// first room, unpaced, makes 439. One more than 250 is a pass that ended
+// just inside the thousandth frame.
+#[test]
+fn the_paced_build_holds_four_frames_a_pass_under_turbo() {
+    if !have_still_rooms(&[DRAWING, DRAWING_MAP, PACED, PACED_MAP]) {
+        return;
+    }
+    let free = still_speeds(DRAWING, DRAWING_MAP, 4);
+    let paced = still_speeds(PACED, PACED_MAP, 4);
+    let normal = still_speeds(PACED, PACED_MAP, 1);
+    for (i, ((f, p), n)) in free.iter().zip(&paced).zip(&normal).enumerate() {
+        assert!(
+            *f > 400,
+            "room {i}: the unpaced build made only {f} at four times the speed"
+        );
+        assert!(
+            (245..=251).contains(p),
+            "room {i}: the paced build made {p} at four times the speed; all {paced:?}"
+        );
+        assert!(
+            *n <= 251,
+            "room {i}: the paced build made {n} at normal speed; all {normal:?}"
+        );
+    }
+}
+
+// A room slower than the pace waits for little: a pass that happens to come
+// in under four frames is held, so the busy rooms give up a pass or three
+// (240, 195 and 229 unpaced; 237, 195 and 226 paced) and no more.
+#[test]
+fn the_paced_build_waits_for_little_in_busy_rooms() {
+    if !have_still_rooms(&[DRAWING, DRAWING_MAP, PACED, PACED_MAP]) {
+        return;
+    }
+    let free = still_speeds(DRAWING, DRAWING_MAP, 1);
+    let paced = still_speeds(PACED, PACED_MAP, 1);
+    for (frame, (f, p)) in BUSY.iter().zip(free.iter().zip(&paced)) {
+        assert!(
+            u32::from(*p) * 100 >= u32::from(*f) * 98,
+            "from frame {frame}: {p} passes paced against {f} unpaced"
+        );
+    }
+}
