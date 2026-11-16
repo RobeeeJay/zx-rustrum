@@ -1,4 +1,4 @@
-//! The faster build of Alien 8 in `assemblies/`: the free-running AY build
+//! The faster build of Alien 8 in `assemblies/alien-8/`: the free-running AY build
 //! with its drawing made cheaper.
 //!
 //! A change made for speed must not change the game, and the game is easy to
@@ -11,14 +11,14 @@
 
 use zx_rustrum::machine::{Model, Spectrum};
 
-const FREE: &str = "assemblies/out/free fixed.szx";
-const FAST: &str = "assemblies/out/fast fixed.szx";
-const FREE_MAP: &str = "assemblies/out/free fixed.map";
-const FAST_MAP: &str = "assemblies/out/fast fixed.map";
-const PACED: &str = "assemblies/out/paced fixed.szx";
-const PACED_MAP: &str = "assemblies/out/paced fixed.map";
-const BANKED: &str = "assemblies/out/banked fixed.szx";
-const BANKED_MAP: &str = "assemblies/out/banked fixed.map";
+const FREE: &str = "assemblies/alien-8/out/free fixed.szx";
+const FAST: &str = "assemblies/alien-8/out/fast fixed.szx";
+const FREE_MAP: &str = "assemblies/alien-8/out/free fixed.map";
+const FAST_MAP: &str = "assemblies/alien-8/out/fast fixed.map";
+const PACED: &str = "assemblies/alien-8/out/paced fixed.szx";
+const PACED_MAP: &str = "assemblies/alien-8/out/paced fixed.map";
+const BANKED: &str = "assemblies/alien-8/out/banked fixed.szx";
+const BANKED_MAP: &str = "assemblies/alien-8/out/banked fixed.map";
 
 fn have(files: &[&str]) -> bool {
     let missing: Vec<_> = files
@@ -578,14 +578,14 @@ const BUSY: [u32; 3] = [45_000, 50_000, 90_000];
 /// The room the played build slowed down in, saved from the emulator, and
 /// the same state at end_of_pass in the original's layout, as busy_machine
 /// takes it (written by keep_the_room_the_game_slowed_down_in).
-const SAVED: &str = "assemblies/Alien-8-saved-slowdown.szx";
-const SLOWED: &str = "assemblies/out/slowed.sna";
-const PLAYED_MAP: &str = "assemblies/out/Alien 8 AY banked.map";
+const SAVED: &str = "assemblies/alien-8/Alien-8-saved-slowdown.szx";
+const SLOWED: &str = "assemblies/alien-8/out/slowed.sna";
+const PLAYED_MAP: &str = "assemblies/alien-8/out/Alien 8 AY banked.map";
 
 // A room saved from the emulator, where the played build was seen to slow
 // down, is carried into the test builds the way the busy rooms from the
 // recording are: as the original's memory at end_of_pass. Run by
-// assemblies/fast.sh. It was saved from the Step 13 build, whose main loop
+// assemblies/alien-8/fast.sh. It was saved from the Step 13 build, whose main loop
 // is where the current build's is, which is checked rather than assumed.
 #[test]
 #[ignore]
@@ -595,7 +595,7 @@ fn keep_the_room_the_game_slowed_down_in() {
     }
     let mut spec = machine(SAVED);
     let end_of_pass = address(PLAYED_MAP, "end_of_pass");
-    let played = machine("assemblies/Alien 8 AY banked start.szx");
+    let played = machine("assemblies/alien-8/Alien 8 AY banked start.szx");
     // Up to the first CALL, whose target may have moved since.
     let code: Vec<(u8, u8)> = (end_of_pass..end_of_pass + 21)
         .map(|a| (spec.bus.peek_raw(a), played.bus.peek_raw(a)))
@@ -625,7 +625,7 @@ fn keep_the_room_the_game_slowed_down_in() {
 
 // The first room has few objects in it, and walking about never leaves it,
 // so three busy rooms are taken from the original's recording too
-// (assemblies/busy_states.py), each at end_of_pass. Only the game's state is
+// (assemblies/alien-8/busy_states.py), each at end_of_pass. Only the game's state is
 // carried into each build: the screen, the variables and objects, and the
 // buffer, since a rebuilt game's code is not where the original's was. The
 // recording was played with a Kempston joystick, which has to be fitted:
@@ -636,7 +636,7 @@ fn the_faster_build_plays_the_same_game_in_busy_rooms() {
     let frames = BUSY;
     let states: Vec<String> = frames
         .iter()
-        .map(|f| format!("assemblies/out/busy{f}.sna"))
+        .map(|f| format!("assemblies/alien-8/out/busy{f}.sna"))
         .collect();
     let mut need: Vec<&str> = states.iter().map(String::as_str).collect();
     need.extend([FREE, FAST, FREE_MAP, FAST_MAP, "roms/128.rom"]);
@@ -673,7 +673,7 @@ fn the_faster_build_plays_the_same_game_in_busy_rooms() {
 fn a_busy_room_takes_less_time_a_pass() {
     let states: Vec<String> = BUSY
         .iter()
-        .map(|f| format!("assemblies/out/busy{f}.sna"))
+        .map(|f| format!("assemblies/alien-8/out/busy{f}.sna"))
         .collect();
     let mut need: Vec<&str> = states.iter().map(String::as_str).collect();
     need.extend([FREE, FAST, FREE_MAP, FAST_MAP, "roms/128.rom"]);
@@ -773,7 +773,7 @@ fn passes_in_1000_frames(snap: &str, map: &str, turbo: u32) -> (u16, u16) {
         key(&mut spec, row, bit, false);
     }
     let room_1 = count(&spec).wrapping_sub(before);
-    let sna = std::fs::read("assemblies/out/busy90000.sna").unwrap();
+    let sna = std::fs::read("assemblies/alien-8/out/busy90000.sna").unwrap();
     let mut busy = busy_machine(&sna, snap, map);
     busy.bus.turbo = turbo;
     let before = count(&busy);
@@ -795,7 +795,7 @@ fn the_paced_build_holds_four_frames_a_pass_at_turbo() {
     if !have(&[
         PACED,
         PACED_MAP,
-        "assemblies/out/busy90000.sna",
+        "assemblies/alien-8/out/busy90000.sna",
         "roms/128.rom",
     ]) {
         return;
@@ -815,10 +815,10 @@ fn the_paced_build_holds_four_frames_a_pass_at_turbo() {
 #[test]
 fn the_banked_build_that_is_played_holds_four_frames_a_pass_too() {
     let (snap, map) = (
-        "assemblies/Alien 8 AY banked start.szx",
-        "assemblies/out/Alien 8 AY banked.map",
+        "assemblies/alien-8/Alien 8 AY banked start.szx",
+        "assemblies/alien-8/out/Alien 8 AY banked.map",
     );
-    if !have(&[snap, map, "assemblies/out/busy90000.sna", "roms/128.rom"]) {
+    if !have(&[snap, map, "assemblies/alien-8/out/busy90000.sna", "roms/128.rom"]) {
         return;
     }
     let (room_1, busy) = passes_in_1000_frames(snap, map, 4);
@@ -837,7 +837,7 @@ fn pacing_costs_a_busy_room_nothing_at_normal_speed() {
         PACED_MAP,
         FAST,
         FAST_MAP,
-        "assemblies/out/busy90000.sna",
+        "assemblies/alien-8/out/busy90000.sna",
         "roms/128.rom",
     ]) {
         return;
@@ -870,15 +870,15 @@ fn the_paced_build_plays_the_same_game() {
     }
 }
 
-// Step 1 of assemblies/memory-plan.md: the snapshot writer puts a bank the
+// Step 1 of assemblies/alien-8/memory-plan.md: the snapshot writer puts a bank the
 // assembler wrote into its page, and can leave the paging free, which the
 // game has to have once it pages anything. Locked, as before, unless asked.
 #[test]
 fn a_snapshot_carries_a_bank_and_can_leave_paging_unlocked() {
     let needs = [
-        "assemblies/snapshot.py",
-        "assemblies/out/recording.z80",
-        "assemblies/out/original.map",
+        "assemblies/alien-8/snapshot.py",
+        "assemblies/alien-8/out/recording.z80",
+        "assemblies/alien-8/out/original.map",
     ];
     if !have(&[&needs[..], &[FAST_MAP, "roms/128.rom"]].concat()) {
         return;
@@ -895,7 +895,7 @@ fn a_snapshot_carries_a_bank_and_can_leave_paging_unlocked() {
             .args([
                 needs[1],
                 needs[2],
-                "assemblies/out/fast fixed.bin",
+                "assemblies/alien-8/out/fast fixed.bin",
                 FAST_MAP,
             ])
             .arg(&out)
@@ -1008,7 +1008,7 @@ fn first_difference(a: &[Vec<u8>], b: &[Vec<u8>]) -> Option<String> {
     })
 }
 
-// Step 2 of assemblies/memory-plan.md moves the room data and the routines
+// Step 2 of assemblies/alien-8/memory-plan.md moves the room data and the routines
 // that read it into bank 3, called with interrupts off. A game start reads
 // it (build_room_list), and the walk goes through a door at pass 34, so both
 // paths are in this; the busy rooms are the passes in between. Since Step
@@ -1019,7 +1019,7 @@ fn first_difference(a: &[Vec<u8>], b: &[Vec<u8>]) -> Option<String> {
 fn the_banked_build_plays_the_same_game_pass_for_pass() {
     let states: Vec<String> = BUSY
         .iter()
-        .map(|f| format!("assemblies/out/busy{f}.sna"))
+        .map(|f| format!("assemblies/alien-8/out/busy{f}.sna"))
         .collect();
     let mut need: Vec<&str> = states.iter().map(String::as_str).collect();
     need.extend([FAST, FAST_MAP, BANKED, BANKED_MAP, "roms/128.rom"]);
@@ -1208,7 +1208,7 @@ fn fitting_a_room_marks_its_entry_in_bank_3() {
     );
 }
 
-// Step 3 of assemblies/memory-plan.md moves the AY driver, the IM 2 table
+// Step 3 of assemblies/alien-8/memory-plan.md moves the AY driver, the IM 2 table
 // and the handler out of bank 0, so an interrupt can be taken with bank 3
 // in, and the stubs into bank 3 leave interrupts on. Under Step 2 alone they
 // turned them off, and the interrupt that came while a room was built was
@@ -1389,9 +1389,9 @@ fn the_tables_are_built_where_they_are_read() {
     );
 }
 
-const STEP4: &str = "assemblies/out/banked step4.szx";
-const STEP4_MAP: &str = "assemblies/out/banked step4.map";
-const PROFILE: &str = "assemblies/out/profile.txt";
+const STEP4: &str = "assemblies/alien-8/out/banked step4.szx";
+const STEP4_MAP: &str = "assemblies/alien-8/out/banked step4.map";
+const PROFILE: &str = "assemblies/alien-8/out/profile.txt";
 
 /// T-states spent at each label of the main image, while `spec` runs `frames`.
 fn profile(
@@ -1431,7 +1431,7 @@ fn profile(
 // frame in the notes, which put mirror_row and mirror_store, a fifth of the
 // time in a busy room, in contended memory. So it goes by this instead: the
 // T-states each label took in the Step 4 build, walking about the first room
-// and in the three busy rooms. Run by assemblies/fast.sh, which then builds
+// and in the three busy rooms. Run by assemblies/alien-8/fast.sh, which then builds
 // Step 5 from it.
 #[test]
 #[ignore]
@@ -1450,7 +1450,7 @@ fn profile_the_layout_of_step_5_goes_by() {
     }
     let _ = t;
     for frame in BUSY {
-        let sna = std::fs::read(format!("assemblies/out/busy{frame}.sna")).unwrap();
+        let sna = std::fs::read(format!("assemblies/alien-8/out/busy{frame}.sna")).unwrap();
         let mut spec = busy_machine(&sna, STEP4, STEP4_MAP);
         profile(&mut spec, STEP4_MAP, 1_000, &mut spent);
     }
@@ -1563,7 +1563,7 @@ fn the_mirrored_copies_make_the_busiest_room_faster() {
         FAST_MAP,
         BANKED,
         BANKED_MAP,
-        "assemblies/out/busy90000.sna",
+        "assemblies/alien-8/out/busy90000.sna",
         "roms/128.rom",
     ]) {
         return;
@@ -1715,12 +1715,12 @@ fn drawing_in_order_draws_the_same_as_beginning_again() {
         FAST_MAP,
         BANKED,
         BANKED_MAP,
-        "assemblies/out/busy90000.sna",
+        "assemblies/alien-8/out/busy90000.sna",
         "roms/128.rom",
     ]) {
         return;
     }
-    let sna = std::fs::read("assemblies/out/busy90000.sna").unwrap();
+    let sna = std::fs::read("assemblies/alien-8/out/busy90000.sna").unwrap();
     let rooms = [
         (busy_machine(&sna, FAST, FAST_MAP), FAST_MAP),
         (busy_machine(&sna, BANKED, BANKED_MAP), BANKED_MAP),
@@ -2153,8 +2153,8 @@ fn a_later_pass_cuts_off_only_its_own_channel() {
     );
 }
 
-const TAPE: &str = "assemblies/Alien 8 AY banked.tap";
-const PLAYED_START: &str = "assemblies/Alien 8 AY banked start.szx";
+const TAPE: &str = "assemblies/alien-8/Alien 8 AY banked.tap";
+const PLAYED_START: &str = "assemblies/alien-8/Alien 8 AY banked start.szx";
 
 /// A 128K that has loaded `TAPE` through its Tape Loader, stopped as the
 /// loader jumps to game_start: with each block handed to the ROM's LD-BYTES
@@ -2295,14 +2295,14 @@ fn starts_as_the_snapshot_does(tape: Spectrum) {
 }
 
 const ORIGINAL_TAPE: &str = "tapes/Alien 8 (1985)(Ultimate Play The Game).zip";
-const LOADING_SCREEN: &str = "assemblies/Alien 8 loading screen.scr";
+const LOADING_SCREEN: &str = "assemblies/alien-8/Alien 8 loading screen.scr";
 
 // The rebuilt game's tape shows the original's loading screen, which can't be
 // lifted off the original tape: it is loaded by Speedlock 1, in turbo blocks
 // of its own. So the original is loaded on a 48K at the tape's speed, and the
 // screen kept is the one that stood still while the tape's last blocks went
 // in, as it was the frame before the game first drew over it. Written for
-// assemblies/tap.py, and run by assemblies/fast.sh.
+// assemblies/alien-8/tap.py, and run by assemblies/alien-8/fast.sh.
 #[test]
 #[ignore]
 fn keep_the_original_loading_screen() {

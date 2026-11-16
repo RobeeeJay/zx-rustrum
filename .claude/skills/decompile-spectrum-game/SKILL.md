@@ -249,7 +249,7 @@ makes the final export reproducible.
    it against somebody's play, `tools/rzx_snapshot.py put` swaps the snapshot in a
    recording for one of the rebuild and keeps the input. A rebuild that makes the
    same fetches between its key reads plays the recording to the same screens;
-   assemblies/ has Alien 8 done that way.
+   assemblies/alien-8/ has Alien 8 done that way.
 
 ## 7. The pictures that go with it
 

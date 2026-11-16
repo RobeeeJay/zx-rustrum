@@ -1,7 +1,7 @@
 # Worked example: Alien 8 (Ultimate, 1985)
 
 Rebuilt from `disassembly/Alien 8 (1985)(Ultimate Play The Game).asm` and
-`recordings/Alien8.rzx` (342,604 frames). Everything made is in `assemblies/`,
+`recordings/Alien8.rzx` (342,604 frames). Everything made is in `assemblies/alien-8/`,
 which git ignores: `README.md` there describes every build, and `memory-plan.md`
 every banking step, with its measurements and its mistakes. The tests are
 `tests/alien8_usage.rs`, `tests/alien8_free_ay.rs` and `tests/alien8_fast.rs`.

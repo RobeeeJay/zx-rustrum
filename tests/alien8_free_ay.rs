@@ -1,4 +1,4 @@
-//! The free-running AY build of Alien 8 in `assemblies/`: the beeper made
+//! The free-running AY build of Alien 8 in `assemblies/alien-8/`: the beeper made
 //! into AY writes that no longer wait, an IM 2 interrupt that plays them, and
 //! the game given the time the sound used to take.
 //!
@@ -9,9 +9,9 @@ use zx_rustrum::machine::{Model, Spectrum};
 use zx_rustrum::scope;
 
 const RATE: f64 = 48_000.0;
-const BEEPER: &str = "assemblies/Alien 8 start.z80";
-const FREE: &str = "assemblies/Alien 8 AY free start.szx";
-const FREE_MAP: &str = "assemblies/out/Alien 8 AY free.map";
+const BEEPER: &str = "assemblies/alien-8/Alien 8 start.z80";
+const FREE: &str = "assemblies/alien-8/Alien 8 AY free start.szx";
+const FREE_MAP: &str = "assemblies/alien-8/out/Alien 8 AY free.map";
 
 fn have(files: &[&str]) -> bool {
     let missing: Vec<_> = files

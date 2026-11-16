@@ -1,4 +1,4 @@
-//! Step 0 of assemblies/memory-plan.md: what of Alien 8's memory is used
+//! Step 0 of assemblies/alien-8/memory-plan.md: what of Alien 8's memory is used
 //! while its objects move, while it draws a frame, and while it is doing
 //! something else (the menu, a tune, building a room).
 //!
@@ -13,16 +13,16 @@
 //! cargo test --release --test alien8_usage -- --ignored --nocapture
 //! ```
 //!
-//! and writes what it found to assemblies/out/usage.txt, and what ran in
-//! each phase label by label to assemblies/out/usage-routines.txt.
+//! and writes what it found to assemblies/alien-8/out/usage.txt, and what ran in
+//! each phase label by label to assemblies/alien-8/out/usage-routines.txt.
 
 use zx_rustrum::machine::{Model, Playback, Spectrum, Stop};
 use zx_rustrum::tracker::Tracker;
 
 const RECORDING: &str = "recordings/Alien8.rzx";
-const MAP: &str = "assemblies/out/original.map";
-const OUT: &str = "assemblies/out/usage.txt";
-const ROUTINES: &str = "assemblies/out/usage-routines.txt";
+const MAP: &str = "assemblies/alien-8/out/original.map";
+const OUT: &str = "assemblies/alien-8/out/usage.txt";
+const ROUTINES: &str = "assemblies/alien-8/out/usage-routines.txt";
 const FRAMES: usize = 131_000;
 
 /// Objects moving, a frame being drawn, and anything else.
@@ -324,13 +324,13 @@ fn what_each_phase_of_a_pass_uses() {
     eprintln!("{}", &report[..report.len().min(400)]);
 }
 
-// Step 12 of assemblies/memory-plan.md keeps sprites already shifted in the
+// Step 12 of assemblies/alien-8/memory-plan.md keeps sprites already shifted in the
 // spare banks, and there is room for only some: which ones is decided by how
 // often the original drew each sprite at each shift, facing each way, over
 // its recording. Facing is whether the stored copy has been mirrored since
 // the recording began (bit 6 of its first byte), which is which of the
 // banked build's two copies it would be drawn from. Writes
-// assemblies/out/shift-usage.txt: label, offset from it, facing (0 as
+// assemblies/alien-8/out/shift-usage.txt: label, offset from it, facing (0 as
 // stored, 1 mirrored), shift, draws, bytes drawn.
 #[test]
 #[ignore]
@@ -352,7 +352,7 @@ fn how_often_each_sprite_is_drawn_at_each_shift() {
     let clipped = at("sprite_clipped");
     // Each sprite's first byte as it was when the recording began, which is
     // how the banked build stores it in bank 0.
-    let stored = std::fs::read("assemblies/out/original.bin").unwrap();
+    let stored = std::fs::read("assemblies/alien-8/out/original.bin").unwrap();
     let mut counts = std::collections::BTreeMap::<(String, u16, u8, u8), (u64, u64)>::new();
     replay(&[clipped], Tracker::new(), |spec, _| {
         let ix = spec.cpu.ix;
@@ -377,7 +377,7 @@ fn how_often_each_sprite_is_drawn_at_each_shift() {
             "{name} {offset} {facing} {shift} {draws} {bytes}\n"
         ));
     }
-    std::fs::write("assemblies/out/shift-usage.txt", out).unwrap();
+    std::fs::write("assemblies/alien-8/out/shift-usage.txt", out).unwrap();
     assert!(
         counts.len() > 50,
         "only {} sprite, facing and shift seen",

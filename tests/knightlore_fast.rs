@@ -1160,7 +1160,7 @@ const LOADING_SCREEN: &str = "assemblies/knight-lore/loading screen.scr";
 // block 135 is reached). So the original is loaded on a 48K at the tape's
 // speed, and the screen kept is the one that stood still while the last
 // block went in (6,093 frames), as it was the frame before the game first
-// drew over it. Written for assemblies/tap.py; run by build.sh.
+// drew over it. Written for assemblies/knight-lore/tap.py; run by build.sh.
 #[test]
 #[ignore]
 fn keep_the_original_loading_screen() {
