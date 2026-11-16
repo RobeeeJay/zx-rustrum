@@ -1284,7 +1284,7 @@ fn starts_as_the_snapshot_does(tape: Spectrum) {
     differs("$5BA0-$BFFF", &main(&tape), &main(&snap));
     // Each bank as far as the game has anything in it, from the snapshot:
     // taken from the tape's blocks instead, a block cut short passed.
-    for n in [0usize, 1, 3, 4, 7] {
+    for n in [0usize, 1, 3, 4, 6, 7] {
         let length = (0..0x4000u16)
             .rev()
             .find(|o| snap.bus.bank_byte(n, *o) != 0)
@@ -1587,8 +1587,8 @@ fn build_tables_still_makes_the_shift_tables() {
 const MEMORY: &str = "assemblies/knight-lore/out/memory fixed.szx";
 const MEMORY_MAP: &str = "assemblies/knight-lore/out/memory fixed.map";
 
-// memory.py's third step draws a sprite already shifted, where banks 1 and 7
-// hold a copy, by the aligned path instead of shifting it as it goes. What is
+// memory.py's third step draws a sprite already shifted, where banks 6, 1 and
+// 7 hold a copy, by the aligned path instead of shifting it as it goes. What is
 // drawn has to be the same.
 #[test]
 fn drawing_sprites_already_shifted_plays_the_same_game() {
@@ -1608,7 +1608,7 @@ fn drawing_sprites_already_shifted_plays_the_same_game() {
 // over all ones by step 2 and by step 3, and the buffers compared. All ones is
 // there because a picture bit outside its mask only shows over a set bit: the
 // shifted path XORs the picture in and the aligned path ORs it. The draws a
-// copy should serve are counted from step 3's directories, 469 of them, so the
+// copy should serve are counted from step 3's directories, 697 of them, so the
 // test can't pass by never using one.
 #[test]
 fn every_sprite_draws_the_same_from_a_copy_already_shifted() {
@@ -1677,13 +1677,14 @@ fn every_sprite_draws_the_same_from_a_copy_already_shifted() {
             }
         }
     }
-    assert!(served > 400, "only {served} draws had a copy to come from");
+    assert!(served > 600, "only {served} draws had a copy to come from");
 }
 
 // What the copies are worth, standing still: 241, 196, 261 and 439 passes in
-// 1,000 frames became 243, 199, 263 and 447, 1.3% together. Less than the
-// 2.3% the copies' share of the shifted bytes promised: banks 1 and 7 are
-// contended, and every shifted draw now looks in the directory first.
+// 1,000 frames became 245, 199, 263 and 447, 1.5% together (1.3% before bank
+// 6 was freed from the tape's loader). Less than the copies' share of the
+// shifted bytes promised: banks 1 and 7 are contended, and every shifted draw
+// now looks in the directory first.
 #[test]
 fn drawing_sprites_already_shifted_is_a_little_faster() {
     if !have_still_rooms(&[MEMORY2, MEMORY2_MAP, MEMORY, MEMORY_MAP]) {
