@@ -1550,3 +1550,35 @@ fn drawing_from_mirrored_copies_is_faster_where_sprites_turn() {
         );
     }
 }
+
+// memory.py's second step cut the end off build_tables, which made the
+// bit-reverse table that only the mirroring read. What is left still has to
+// make the shift tables. The image already holds them, taken from a running
+// machine, so build_tables rewriting the same bytes shows nothing: they are
+// emptied first, then made, and compared with the image's.
+#[test]
+fn build_tables_still_makes_the_shift_tables() {
+    if !have(&[MEMORY, MEMORY_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let mut spec = machine(MEMORY);
+    let at = address(MEMORY_MAP, "shift_tables");
+    let kept: Vec<u8> = (at..0x9000).map(|a| spec.bus.peek_raw(a)).collect();
+    assert!(
+        kept.iter().any(|b| *b != 0xFF),
+        "the image's shift tables are blank"
+    );
+    for a in at..0x9000 {
+        spec.bus.poke(a, 0);
+    }
+    call(&mut spec, address(MEMORY_MAP, "build_tables"));
+    let made: Vec<u8> = (at..0x9000).map(|a| spec.bus.peek_raw(a)).collect();
+    if let Some(i) = made.iter().zip(&kept).position(|(m, k)| m != k) {
+        panic!(
+            "${:04X}: build_tables made ${:02X}, the image has ${:02X}",
+            at + i as u16,
+            made[i],
+            kept[i]
+        );
+    }
+}
