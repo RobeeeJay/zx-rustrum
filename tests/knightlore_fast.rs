@@ -491,6 +491,7 @@ fn every_build_plays_the_same_game_in_busy_rooms() {
         (BANKED, BANKED_MAP),
         (AY_FREE, AY_FREE_MAP),
         (FAST, FAST_MAP),
+        (DRAWING, DRAWING_MAP),
     ];
     let mut need: Vec<String> = BUSY
         .iter()
@@ -799,6 +800,157 @@ fn the_fast_build_is_no_slower_in_busy_rooms() {
         assert!(
             after >= before,
             "from frame {frame}: {after} passes in 1,000 frames against {before}"
+        );
+    }
+}
+
+const DRAWING: &str = "assemblies/knight-lore/out/drawing fixed.szx";
+const DRAWING_MAP: &str = "assemblies/knight-lore/out/drawing fixed.map";
+
+// drawing.py's first step stops the pair test as soon as one axis settles
+// it, instead of working out all three and looking the case up. It is the
+// same subtractions on the same bytes, so the game has to be the same.
+#[test]
+fn the_pair_test_that_stops_early_plays_the_same_game() {
+    if !have(&[FAST, FAST_MAP, DRAWING, DRAWING_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let fast = play_by_pass(FAST, FAST_MAP, 300);
+    let drawing = play_by_pass(DRAWING, DRAWING_MAP, 300);
+    assert_eq!(
+        first_difference(&fast, &drawing),
+        None,
+        "walking from the start of a game"
+    );
+}
+
+/// Passes in 1,000 frames from each busy room, for each build given.
+fn busy_speeds(builds: &[(&str, &str)]) -> Option<Vec<Vec<u16>>> {
+    let mut need: Vec<String> = BUSY
+        .iter()
+        .map(|f| format!("assemblies/knight-lore/out/busy{f}.sna"))
+        .collect();
+    need.extend(
+        builds
+            .iter()
+            .flat_map(|(s, m)| [s.to_string(), m.to_string()]),
+    );
+    need.push("roms/128.rom".into());
+    if !have(&need.iter().map(String::as_str).collect::<Vec<_>>()) {
+        return None;
+    }
+    Some(
+        BUSY.iter()
+            .map(|frame| {
+                let sna =
+                    std::fs::read(format!("assemblies/knight-lore/out/busy{frame}.sna")).unwrap();
+                builds
+                    .iter()
+                    .map(|(s, m)| passes_in_1000_frames(&sna, s, m))
+                    .collect()
+            })
+            .collect(),
+    )
+}
+
+// Play reaches only some of the ways two boxes can lie: a charm sitting in
+// something else's place, which is depth_overlap, hardly ever. So the objects
+// of the busiest room are scattered about at random, a few made charms, all
+// marked to be drawn, and both builds put them in order and draw them: the
+// buffer and the objects (depth_overlap rewrites a type) have to agree.
+#[test]
+fn every_scattered_room_is_drawn_in_the_same_order() {
+    let sna_path = "assemblies/knight-lore/out/busy91000.sna";
+    if !have(&[
+        sna_path,
+        FAST,
+        FAST_MAP,
+        DRAWING,
+        DRAWING_MAP,
+        "roms/128.rom",
+    ]) {
+        return;
+    }
+    let sna = std::fs::read(sna_path).unwrap();
+    let builds = [(FAST, FAST_MAP), (DRAWING, DRAWING_MAP)];
+    let mut machines: Vec<Spectrum> = builds
+        .iter()
+        .map(|(s, m)| busy_machine(&sna, s, m))
+        .collect();
+    let mut seed = 0x2545_F491u32;
+    let mut next = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        seed
+    };
+    let (mut overlaps, mut drawn) = (0, 0);
+    for trial in 0..300 {
+        let mut objects = sna[27 + 0x1C08..27 + 0x2108].to_vec();
+        for slot in objects.chunks_mut(32) {
+            if slot[0] == 0 {
+                continue;
+            }
+            // x, y and height moved by up to 20 either way.
+            for at in &mut slot[1..=3] {
+                *at = at.wrapping_add((next() % 41) as u8).wrapping_sub(20);
+            }
+            if next() % 8 == 0 {
+                slot[0] = 0x60 + (next() % 7) as u8;
+            }
+            slot[7] |= 0x10;
+        }
+        let mut after = Vec::new();
+        for ((_, map), spec) in builds.iter().zip(machines.iter_mut()) {
+            for (i, b) in objects.iter().enumerate() {
+                spec.bus.poke(0x5C08 + i as u16, *b);
+            }
+            let buffer = address(map, "buffer");
+            for i in 0..0x1800u16 {
+                spec.bus.poke(buffer + i, 0);
+            }
+            call(spec, address(map, "list_to_draw"));
+            call(spec, address(map, "draw_in_order"));
+            let mut state: Vec<u8> = (0..0x1800u16)
+                .map(|i| spec.bus.peek_raw(buffer + i))
+                .collect();
+            state.extend((0x5C08..0x6108u16).map(|a| spec.bus.peek_raw(a)));
+            after.push(state);
+        }
+        if let Some(at) = after[0].iter().zip(&after[1]).position(|(a, b)| a != b) {
+            panic!(
+                "trial {trial}: {} byte {at:#06X} is ${:02X} in the fast build and ${:02X} after",
+                if at < 0x1800 { "buffer" } else { "objects" },
+                after[0][at],
+                after[1][at]
+            );
+        }
+        overlaps += (0..40)
+            .filter(|o| after[0][0x1800 + o * 32] == 0xBB && objects[o * 32] != 0xBB)
+            .count();
+        drawn += usize::from(after[0][..0x1800].iter().any(|b| *b != 0));
+    }
+    assert!(drawn > 250, "only {drawn} of 300 rooms drew anything");
+    assert!(
+        overlaps > 10,
+        "only {overlaps} charms were found overlapping something"
+    );
+}
+
+// The point of the pair test stopping early. Measured: 209, 180 and 207
+// passes in 1,000 frames in the busy rooms became 228, 190 and 215, the
+// most where the most objects are drawn in the most overlapping places.
+#[test]
+fn the_pair_test_that_stops_early_is_faster_in_every_busy_room() {
+    let Some(speeds) = busy_speeds(&[(FAST, FAST_MAP), (DRAWING, DRAWING_MAP)]) else {
+        return;
+    };
+    for (frame, s) in BUSY.iter().zip(&speeds) {
+        assert!(
+            u32::from(s[1]) * 100 >= u32::from(s[0]) * 103,
+            "from frame {frame}: {} passes against the fast build's {}; all: {speeds:?}",
+            s[1],
+            s[0]
         );
     }
 }
