@@ -272,6 +272,15 @@ start or end of a game. Then `banked.py`, a step at a time, each behind
   the test an explicit rule for what may differ.
 - **Tried and slower:** cutting columns as well as rows (the POP-driven loop can
   only skip by reading); remembering pair tests. Write these up.
+- **Anything added to the interrupt handler deepens its stack.** Knight Lore's
+  handler ran on 16 bytes until the effects channels' ticks went under it at 18,
+  overran into code, and crashed the game only on a long walk. Fill the
+  handler's stack with a marker, play, and measure how far it was written,
+  every time the handler grows.
+- **A tape loader needs no interrupt table if LD-BYTES never turns interrupts
+  on**: do its first steps (to $0561) yourself, push your own return, and enter
+  at $0562, past the push of SA/LD-RET, which is where the EI is. Then the
+  loader can live in any bank, contended or not, with I left uncontended.
 - **Sound on the 128K's other channels.** Tunes on A; the player's sounds on B,
   everything else's on C, each with its own small queue, a set volume with an
   attack and a release instead of the envelope. Check the volumes a frame at a

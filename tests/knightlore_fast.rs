@@ -493,7 +493,7 @@ fn every_build_plays_the_same_game_in_busy_rooms() {
         (FAST, FAST_MAP),
         (DRAWING1, DRAWING1_MAP),
         (DRAWING, DRAWING_MAP),
-        (MEMORY1, MEMORY1_MAP),
+        (EFFECTS, EFFECTS_MAP),
         (MEMORY2, MEMORY2_MAP),
         (MEMORY, MEMORY_MAP),
     ];
@@ -1088,8 +1088,8 @@ fn the_paced_build_holds_four_frames_a_pass_under_turbo() {
 
 // Pacing costs a little below the cap: a pass that comes in under four frames
 // is held to four and one over it is not made up, so a room averages less than
-// the 250 its quickest passes would allow. Measured on the memory build: 241,
-// 196 and 261 passes unpaced in the busy rooms, 239, 195 and 243 paced; the
+// the 250 its quickest passes would allow. Measured on the memory build: 244,
+// 198 and 262 passes unpaced in the busy rooms, 241, 198 and 242 paced; the
 // room at frame 91,000, which goes quicker than the pace unpaced, loses the
 // most. More than 4% under the lesser of the two is a wait that is overdone.
 #[test]
@@ -1390,20 +1390,21 @@ fn profile_the_drawing_build() {
     std::fs::write("assemblies/knight-lore/out/profile.txt", text).unwrap();
 }
 
-const MEMORY1: &str = "assemblies/knight-lore/out/memory1 fixed.szx";
-const MEMORY1_MAP: &str = "assemblies/knight-lore/out/memory1 fixed.map";
-
 // memory.py's first step exchanges the sprites with everything that was
 // above $C000: the sprites up into bank 0, and the code, the buffer and the
-// tables down into the room they leave, the hottest code uncontended. Only
-// where things are changes, so the game has to be the same.
+// tables down into the room they leave, the hottest code uncontended. Its
+// second keeps a mirrored copy of every sprite in bank 4 and pages in
+// whichever faces the right way. Only where things are and which copy is
+// read changes, so the game has to be the same. (Step 1 was tested alone
+// until effects.py filled fixed memory and it stopped fitting without step
+// 2's reclaimed page.)
 #[test]
 fn the_exchanged_memory_plays_the_same_game() {
-    if !have(&[DRAWING, DRAWING_MAP, MEMORY1, MEMORY1_MAP, "roms/128.rom"]) {
+    if !have(&[EFFECTS, EFFECTS_MAP, MEMORY2, MEMORY2_MAP, "roms/128.rom"]) {
         return;
     }
-    let before = play_by_pass(DRAWING, DRAWING_MAP, 300);
-    let after = play_by_pass(MEMORY1, MEMORY1_MAP, 300);
+    let before = play_by_pass(EFFECTS, EFFECTS_MAP, 300);
+    let after = play_by_pass(MEMORY2, MEMORY2_MAP, 300);
     assert_eq!(
         first_difference(&before, &after),
         None,
@@ -1421,16 +1422,16 @@ fn the_end_of_a_game_is_printed_in_the_same_places() {
     let sna_path = "assemblies/knight-lore/out/busy91000.sna";
     if !have(&[
         sna_path,
-        DRAWING,
-        DRAWING_MAP,
-        MEMORY1,
-        MEMORY1_MAP,
+        EFFECTS,
+        EFFECTS_MAP,
+        MEMORY2,
+        MEMORY2_MAP,
         "roms/128.rom",
     ]) {
         return;
     }
     let sna = std::fs::read(sna_path).unwrap();
-    let screens: Vec<Vec<u8>> = [(DRAWING, DRAWING_MAP), (MEMORY1, MEMORY1_MAP)]
+    let screens: Vec<Vec<u8>> = [(EFFECTS, EFFECTS_MAP), (MEMORY2, MEMORY2_MAP)]
         .iter()
         .map(|(snap, map)| {
             let mut spec = busy_machine(&sna, snap, map);
@@ -1465,49 +1466,37 @@ fn the_end_of_a_game_is_printed_in_the_same_places() {
 const MEMORY2: &str = "assemblies/knight-lore/out/memory2 fixed.szx";
 const MEMORY2_MAP: &str = "assemblies/knight-lore/out/memory2 fixed.map";
 
-// memory.py's second step keeps a mirrored copy of every sprite in bank 4 at
-// the same address, and pages in whichever faces the right way instead of
-// mirroring a sprite in place. What is drawn has to be the same.
-#[test]
-fn drawing_from_mirrored_copies_plays_the_same_game() {
-    if !have(&[MEMORY1, MEMORY1_MAP, MEMORY2, MEMORY2_MAP, "roms/128.rom"]) {
-        return;
-    }
-    let before = play_by_pass(MEMORY1, MEMORY1_MAP, 300);
-    let after = play_by_pass(MEMORY2, MEMORY2_MAP, 300);
-    assert_eq!(
-        first_difference(&before, &after),
-        None,
-        "walking from the start of a game"
-    );
-}
-
 // Bank 4's copies are made by memory.py, not by the game, so each has to be
-// what the game would have made: the step 1 build is asked to mirror every
-// sprite in place, from a fresh machine each time, and the result compared
-// with bank 4 byte for byte.
+// what the game would have made: the effects build, before the exchange, is
+// asked to mirror every sprite in place, from a fresh machine each time, and
+// the result compared with bank 4 byte for byte.
 #[test]
 fn every_mirrored_copy_is_what_the_game_would_have_made() {
-    if !have(&[MEMORY1, MEMORY1_MAP, MEMORY2, MEMORY2_MAP, "roms/128.rom"]) {
+    if !have(&[EFFECTS, EFFECTS_MAP, MEMORY2, MEMORY2_MAP, "roms/128.rom"]) {
         return;
     }
     let mirrored = machine(MEMORY2);
-    let fresh = machine(MEMORY1);
-    let table = address(MEMORY1_MAP, "sprite_table");
-    let mut sprites: Vec<u16> = (0..188u16)
-        .map(|i| {
-            u16::from_le_bytes([
-                fresh.bus.peek_raw(table + 2 * i),
-                fresh.bus.peek_raw(table + 2 * i + 1),
-            ])
-        })
-        .filter(|a| fresh.bus.peek_raw(*a) & 0x0F != 0)
+    let fresh = machine(EFFECTS);
+    let word = |s: &Spectrum, table: u16, i: u16| {
+        u16::from_le_bytes([
+            s.bus.peek_raw(table + 2 * i),
+            s.bus.peek_raw(table + 2 * i + 1),
+        ])
+    };
+    let (old_table, new_table) = (
+        address(EFFECTS_MAP, "sprite_table"),
+        address(MEMORY2_MAP, "sprite_table"),
+    );
+    // Each sprite where the effects build keeps it, and where bank 4 does.
+    let mut sprites: Vec<(u16, u16)> = (0..188u16)
+        .map(|i| (word(&fresh, old_table, i), word(&mirrored, new_table, i)))
+        .filter(|(at, _)| fresh.bus.peek_raw(*at) & 0x0F != 0)
         .collect();
     sprites.sort();
     sprites.dedup();
-    let orient = address(MEMORY1_MAP, "orient_sprite");
-    for at in &sprites {
-        let mut spec = machine(MEMORY1);
+    let orient = address(EFFECTS_MAP, "orient_sprite");
+    for (at, copy) in &sprites {
+        let mut spec = machine(EFFECTS);
         let first = spec.bus.peek_raw(*at);
         let size = 2 + 2 * u16::from(first & 0x0F) * u16::from(spec.bus.peek_raw(at + 1));
         // An object wanting it the other way round, and the same way up.
@@ -1517,26 +1506,24 @@ fn every_mirrored_copy_is_what_the_game_would_have_made() {
         for o in 0..size {
             let (made, kept) = (
                 spec.bus.peek_raw(at + o),
-                mirrored.bus.bank_byte(4, at - 0xC000 + o),
+                mirrored.bus.bank_byte(4, copy - 0xC000 + o),
             );
-            assert_eq!(
-                made, kept,
-                "sprite at ${at:04X}, byte {o}: the game made ${made:02X}, bank 4 has ${kept:02X}"
-            );
+            assert_eq!(made, kept, "sprite at ${at:04X}, byte {o}: the game made ${made:02X}, bank 4 has ${kept:02X} at ${copy:04X}");
         }
     }
     assert!(sprites.len() > 90, "only {} sprites", sprites.len());
 }
 
-// Measured: in the busy room at frame 91,000, where mirroring took 13% of the
-// time, 229 passes in 1,000 frames became 261; the other two, which mirror
-// little, stayed at 241 and 196, and so did the first room standing still.
+// Measured against the effects build: in the busy room at frame 91,000, where
+// mirroring took 13% of the time, 227 passes in 1,000 frames became 260; the
+// other two, which mirror little, went from 238 and 194 to 239 and 194, and
+// the first room standing still stayed at 437.
 #[test]
 fn drawing_from_mirrored_copies_is_faster_where_sprites_turn() {
-    if !have_still_rooms(&[MEMORY1, MEMORY1_MAP, MEMORY2, MEMORY2_MAP]) {
+    if !have_still_rooms(&[EFFECTS, EFFECTS_MAP, MEMORY2, MEMORY2_MAP]) {
         return;
     }
-    let before = still_speeds(MEMORY1, MEMORY1_MAP, 1);
+    let before = still_speeds(EFFECTS, EFFECTS_MAP, 1);
     let after = still_speeds(MEMORY2, MEMORY2_MAP, 1);
     assert!(
         u32::from(after[2]) * 100 >= u32::from(before[2]) * 110,
@@ -1680,8 +1667,8 @@ fn every_sprite_draws_the_same_from_a_copy_already_shifted() {
     assert!(served > 600, "only {served} draws had a copy to come from");
 }
 
-// What the copies are worth, standing still: 241, 196, 261 and 439 passes in
-// 1,000 frames became 245, 199, 263 and 447, 1.5% together (1.3% before bank
+// What the copies are worth, standing still: 239, 194, 260 and 437 passes in
+// 1,000 frames became 244, 198, 262 and 444, 1.6% together (1.3% before bank
 // 6 was freed from the tape's loader). Less than the copies' share of the
 // shifted bytes promised: banks 1 and 7 are contended, and every shifted draw
 // now looks in the directory first.
@@ -1706,4 +1693,230 @@ fn drawing_sprites_already_shifted_is_a_little_faster() {
         a * 100 >= b * 101,
         "{a} passes in all four rooms against {b}"
     );
+}
+
+const EFFECTS: &str = "assemblies/knight-lore/out/effects fixed.szx";
+const EFFECTS_MAP: &str = "assemblies/knight-lore/out/effects fixed.map";
+
+// effects.py moves the sound effects off channel A to channels of their own.
+// Only the sound changes; the game, pass for pass, must not.
+#[test]
+fn the_effects_on_their_own_channels_play_the_same_game() {
+    if !have(&[DRAWING, DRAWING_MAP, EFFECTS, EFFECTS_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let before = play_by_pass(DRAWING, DRAWING_MAP, 300);
+    let after = play_by_pass(EFFECTS, EFFECTS_MAP, 300);
+    assert_eq!(
+        first_difference(&before, &after),
+        None,
+        "walking from the start of a game"
+    );
+}
+
+/// What ay_int does for one effects channel fifty times a second, `block`
+/// being fx_player or fx_world.
+fn fx_tick(spec: &mut Spectrum, block: &str) {
+    spec.cpu.iy = address(EFFECTS_MAP, block);
+    call(spec, address(EFFECTS_MAP, "fx_tick"));
+}
+
+// Everything played on channel A from one queue, under the AY's one
+// envelope, so a click was a blip of a few milliseconds and any sound cut off
+// the one before. Now the player's sounds go to B and everything else's to C,
+// rising from 11 by 2 a frame to full while queued, then falling by 2 a
+// frame. A beep of 64 clicks at pitch $80 is 64 x 53 = 3,392 units, and a
+// frame takes 1,108: three frames leave 68 and the fourth finds it gone.
+#[test]
+fn an_effect_is_held_on_its_own_channel_and_then_let_go() {
+    if !have(&[EFFECTS, EFFECTS_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let start = at_first_pass(EFFECTS, EFFECTS_MAP);
+    let mixer = start.bus.audio.ay.regs[7];
+    assert_eq!(
+        mixer & 0x07,
+        0,
+        "tones on A, B and C in the mixer (register 7 is ${mixer:02X})"
+    );
+    let pitch = 0x80u8;
+    let tone = u16::from(
+        start
+            .bus
+            .peek_raw(address(EFFECTS_MAP, "ay_pitch") + u16::from(pitch)),
+    );
+    let beep = address(EFFECTS_MAP, "beep");
+    // The player's legs, its head, and an object of the world's.
+    for (ix, block, tone_reg, volume, other) in [
+        (0x5C08u16, "fx_player", 2usize, 9usize, 10usize),
+        (0x5C28, "fx_player", 2, 9, 10),
+        (0x5C48, "fx_world", 4, 10, 9),
+    ] {
+        let mut spec = start.clone();
+        for b in ["fx_player", "fx_world"] {
+            for _ in 0..10 {
+                fx_tick(&mut spec, b);
+            }
+        }
+        let before = spec.bus.audio.ay.regs;
+        spec.cpu.ix = ix;
+        call_with(&mut spec, beep, u16::from(pitch) << 8 | 64, 0, 0);
+        let regs = spec.bus.audio.ay.regs;
+        assert_eq!(
+            (
+                u16::from_le_bytes([regs[tone_reg], regs[tone_reg + 1]]),
+                regs[volume]
+            ),
+            (tone, 11),
+            "IX ${ix:04X}, {block}: the beep's tone and volume as it starts"
+        );
+        assert_eq!(
+            regs[other], before[other],
+            "IX ${ix:04X}: the other effects channel"
+        );
+        assert_eq!(
+            (regs[0], regs[1], regs[8]),
+            (before[0], before[1], before[8]),
+            "IX ${ix:04X}: channel A"
+        );
+        let mut levels = Vec::new();
+        for _ in 0..12 {
+            fx_tick(&mut spec, block);
+            levels.push(spec.bus.audio.ay.regs[volume]);
+        }
+        assert_eq!(
+            levels,
+            [13, 15, 15, 13, 11, 9, 7, 5, 3, 1, 0, 0],
+            "IX ${ix:04X}, {block}: the volume a frame at a time as the beep rises, is held and is let go"
+        );
+    }
+    // And it is the interrupt that does it, with the game running.
+    let mut spec = start.clone();
+    spec.cpu.ix = 0x5C08;
+    call_with(&mut spec, beep, u16::from(pitch) << 8 | 64, 0, 0);
+    let t = spec.bus.model.frame_t();
+    let mut levels = Vec::new();
+    for _ in 0..20 {
+        spec.run(t);
+        levels.push(spec.bus.audio.ay.regs[9]);
+    }
+    let peak = levels.iter().position(|v| *v == 15);
+    assert!(
+        peak.is_some_and(|p| levels[..=p].windows(2).all(|w| w[1] >= w[0])
+            && levels[p..].windows(2).all(|w| w[1] <= w[0]))
+            && levels[0] < 15
+            && levels[19] == 0,
+        "channel B a frame at a time with the game running: {levels:?}"
+    );
+}
+
+// A sound from a later pass used to cut off whatever was left of the last,
+// whatever made it. Now it only cuts off its own channel's.
+#[test]
+fn a_later_pass_cuts_off_only_its_own_channel() {
+    if !have(&[EFFECTS, EFFECTS_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let mut spec = at_first_pass(EFFECTS, EFFECTS_MAP);
+    let beep = address(EFFECTS_MAP, "beep");
+    spec.cpu.ix = 0x5C08;
+    call_with(&mut spec, beep, 0x8040, 0, 0);
+    let pass = passes(&spec);
+    spec.bus.poke(PASS_COUNT, (pass + 1) as u8);
+    spec.cpu.ix = 0x5C48;
+    call_with(&mut spec, beep, 0x4040, 0, 0);
+    let player = address(EFFECTS_MAP, "fx_player");
+    let queued = |s: &Spectrum| {
+        s.bus
+            .peek_raw(player + 1)
+            .wrapping_sub(s.bus.peek_raw(player))
+            & 0x3F
+    };
+    assert_eq!(
+        queued(&spec),
+        4,
+        "the player's beep is still queued after the world's, from a later pass"
+    );
+    spec.bus.poke(PASS_COUNT, (pass + 2) as u8);
+    spec.cpu.ix = 0x5C08;
+    call_with(&mut spec, beep, 0x2040, 0, 0);
+    let front = spec.bus.peek_raw(player);
+    let tone = spec.bus.peek_raw(player + 8 + u16::from(front));
+    let want = spec.bus.peek_raw(address(EFFECTS_MAP, "ay_pitch") + 0x20);
+    assert_eq!(
+        (queued(&spec), tone),
+        (4, want),
+        "the player's own later beep replaces its first"
+    );
+}
+
+// The interrupt runs on a stack of its own, so that it can be taken while SP
+// is reading a sprite. fast.py gave it 16 bytes; with both effects channels'
+// fx_tick under it, it went 18 deep walking and ran down into the code
+// below it, and the game crashed into its font. effects.py gives it 48. The
+// space is filled with a marker, the game walked and left in the busy rooms,
+// and what was written has to fit, with room to spare.
+#[test]
+fn the_interrupts_stack_holds_what_the_effects_add() {
+    if !have(&[EFFECTS, EFFECTS_MAP, "roms/128.rom"]) {
+        return;
+    }
+    let top = address(EFFECTS_MAP, "ay_int_stack");
+    let size = 48u16;
+    let mark = |spec: &mut Spectrum| {
+        for a in top - size..top {
+            spec.bus.poke(a, 0xA5);
+        }
+    };
+    let depth = |spec: &Spectrum| {
+        (top - size..top)
+            .find(|a| spec.bus.peek_raw(*a) != 0xA5)
+            .map_or(0, |a| top - a)
+    };
+    let mut spec = at_first_pass(EFFECTS, EFFECTS_MAP);
+    mark(&mut spec);
+    let t = spec.bus.model.frame_t();
+    for f in 0..3_000 {
+        let walking = WALK[f / 100 % WALK.len()];
+        for (row, bit) in WALK {
+            key(&mut spec, row, bit, (row, bit) == walking);
+        }
+        spec.run(t);
+    }
+    let mut deepest = depth(&spec);
+    for frame in BUSY {
+        let sna = std::fs::read(format!("assemblies/knight-lore/out/busy{frame}.sna")).unwrap();
+        let mut spec = busy_machine(&sna, EFFECTS, EFFECTS_MAP);
+        mark(&mut spec);
+        for _ in 0..1_000 {
+            spec.run(t);
+        }
+        deepest = deepest.max(depth(&spec));
+    }
+    assert!(
+        deepest > 16,
+        "the interrupt only went {deepest} deep, so this is not measuring it"
+    );
+    assert!(
+        deepest <= size - 16,
+        "the interrupt went {deepest} deep into its {size} bytes"
+    );
+}
+
+// The effects cost a little: the interrupt runs both channels' fx_tick fifty
+// times a second. Measured standing still, 240, 195, 229 and 439 passes in
+// 1,000 frames became 238, 194, 227 and 437.
+#[test]
+fn the_effects_cost_no_more_than_two_per_cent() {
+    if !have_still_rooms(&[DRAWING, DRAWING_MAP, EFFECTS, EFFECTS_MAP]) {
+        return;
+    }
+    let before = still_speeds(DRAWING, DRAWING_MAP, 1);
+    let after = still_speeds(EFFECTS, EFFECTS_MAP, 1);
+    for (i, (b, a)) in before.iter().zip(&after).enumerate() {
+        assert!(
+            u32::from(*a) * 100 >= u32::from(*b) * 98,
+            "room {i}: {a} against {b}; all {before:?} and {after:?}"
+        );
+    }
 }
