@@ -818,7 +818,12 @@ fn the_banked_build_that_is_played_holds_four_frames_a_pass_too() {
         "assemblies/alien-8/Alien 8 AY banked start.szx",
         "assemblies/alien-8/out/Alien 8 AY banked.map",
     );
-    if !have(&[snap, map, "assemblies/alien-8/out/busy90000.sna", "roms/128.rom"]) {
+    if !have(&[
+        snap,
+        map,
+        "assemblies/alien-8/out/busy90000.sna",
+        "roms/128.rom",
+    ]) {
         return;
     }
     let (room_1, busy) = passes_in_1000_frames(snap, map, 4);
