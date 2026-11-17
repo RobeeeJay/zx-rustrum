@@ -316,10 +316,29 @@ pub fn call_graph(session: &mut Session, args: &Json) -> Result<String, String> 
 
 pub fn code_map(session: &mut Session, args: &Json) -> Result<String, String> {
     let min = count(args, "min_length", 8)? as u16;
+    let limit = count(args, "limit", 60)? as usize;
+    let from = match args.get("from") {
+        Some(_) => addr(args, "from")?,
+        None => 0,
+    };
+    let to = match args.get("to") {
+        Some(_) => addr(args, "to")?,
+        None => 0xFFFF,
+    };
     let observer = &session.spec.bus.observer;
-    let code = observer.code_runs();
-    let data = observer.data_blocks(min);
-    if code.is_empty() && data.is_empty() {
+    // A run is kept if any of it lies in the range, and printed whole.
+    let inside = |low: u32, high: u32| high >= from as u32 && low <= to as u32;
+    let code: Vec<(u16, u16)> = observer
+        .code_runs()
+        .into_iter()
+        .filter(|(low, high)| inside(*low as u32, *high as u32))
+        .collect();
+    let data: Vec<(u16, u16)> = observer
+        .data_blocks(min)
+        .into_iter()
+        .filter(|(low, length)| inside(*low as u32, *low as u32 + *length as u32 - 1))
+        .collect();
+    if observer.code_runs().is_empty() && observer.data_blocks(min).is_empty() {
         return Err(
             "nothing has been watched yet: call watch_routines, then run the machine".into(),
         );
@@ -331,15 +350,23 @@ pub fn code_map(session: &mut Session, args: &Json) -> Result<String, String> {
         data.len()
     );
     out.push_str("code:\n");
-    for (low, high) in code.iter().take(60) {
+    for (low, high) in code.iter().take(limit) {
         out.push_str(&format!(
             "  ${low:04X}-${high:04X}  {} bytes\n",
             *high as u32 - *low as u32 + 1
         ));
     }
+    // Leaving runs out without saying so made a map look complete when it
+    // was not: Trap Door's small blocks of data were simply missing from it.
+    if code.len() > limit {
+        out.push_str(&format!(
+            "  ({} more not shown: narrow from and to, or raise limit)\n",
+            code.len() - limit
+        ));
+    }
     out.push_str("data (read, never executed):\n");
     // data_blocks gives where each block starts and how long it is, longest first.
-    for (low, length) in data.iter().take(60) {
+    for (low, length) in data.iter().take(limit) {
         let length = *length as u32;
         let high = (*low as u32 + length - 1) as u16;
         let where_ = match low {
@@ -349,6 +376,12 @@ pub fn code_map(session: &mut Session, args: &Json) -> Result<String, String> {
         };
         out.push_str(&format!(
             "  ${low:04X}-${high:04X}  {length} bytes{where_}\n"
+        ));
+    }
+    if data.len() > limit {
+        out.push_str(&format!(
+            "  ({} more not shown: narrow from and to, or raise limit)\n",
+            data.len() - limit
         ));
     }
     Ok(out)

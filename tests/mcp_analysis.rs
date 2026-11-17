@@ -1547,3 +1547,54 @@ fn the_code_map_gives_each_block_of_data_from_its_start_to_its_end() {
         assert!(bytes <= 65_536, "a block bigger than memory: {line}");
     }
 }
+
+// The map listed the widest sixty runs of each kind and dropped the rest
+// without a word, so a game's small tables looked as if they had never been
+// read. It has to say how many it left out, and a range has to bring them back.
+#[test]
+fn the_code_map_says_what_it_left_out_and_shows_it_in_a_range() {
+    let mut server = Server::new();
+    let spec = &mut server.session.spec;
+    // LD HL,$A000 : LD B,70 : loop: LD A,(HL) : INC HL : INC HL : DJNZ loop : JR $
+    let code = [
+        0x21, 0x00, 0xA0, 0x06, 70, 0x7E, 0x23, 0x23, 0x10, 0xFB, 0x18, 0xFE,
+    ];
+    for (i, b) in code.iter().enumerate() {
+        spec.bus.poke(0x8000 + i as u16, *b);
+    }
+    spec.cpu.pc = 0x8000;
+    call(&mut server, "watch_routines", Json::obj([])).unwrap();
+    call(
+        &mut server,
+        "run_tstates",
+        Json::obj([("tstates", Json::num(5_000))]),
+    )
+    .unwrap();
+
+    // Seventy bytes read one apart: seventy blocks of data, ten more than shown.
+    let whole = call(
+        &mut server,
+        "code_map",
+        Json::obj([("min_length", Json::num(1))]),
+    )
+    .unwrap();
+    assert!(
+        whole.contains("10 more not shown"),
+        "the map should count the blocks it leaves out: {whole}"
+    );
+
+    let narrow = call(
+        &mut server,
+        "code_map",
+        Json::obj([
+            ("min_length", Json::num(1)),
+            ("from", Json::str("$A08A")),
+            ("to", Json::str("$A08A")),
+        ]),
+    )
+    .unwrap();
+    assert!(
+        narrow.contains("  $A08A-$A08A  1 bytes") && !narrow.contains("$A000-"),
+        "a range should show the block at $A08A and nothing outside it: {narrow}"
+    );
+}

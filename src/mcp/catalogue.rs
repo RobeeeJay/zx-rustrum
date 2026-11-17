@@ -833,10 +833,27 @@ fn own_tools() -> Vec<Json> {
             "Which addresses were executed and which were only read: what is code and what \
              is data, as far as the machine has got. Blocks in $4000-$5AFF are the screen \
              itself.",
-            [(
-                "min_length",
-                prop("integer", "shortest data block to report (default 8)"),
-            )],
+            [
+                (
+                    "min_length",
+                    prop("integer", "shortest data block to report (default 8)"),
+                ),
+                (
+                    "from",
+                    address("only runs reaching this address or above (default $0000)"),
+                ),
+                (
+                    "to",
+                    address("only runs reaching this address or below (default $FFFF)"),
+                ),
+                (
+                    "limit",
+                    prop(
+                        "integer",
+                        "most runs of each kind to list (default 60); the rest are counted",
+                    ),
+                ),
+            ],
         ),
         tool(
             "coverage",
