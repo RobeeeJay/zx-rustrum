@@ -125,7 +125,10 @@ Work it down:
 - **`force_branch`** for what is left, from a saved state near it. It runs the
   other side on a copy and keeps only which bytes ran, marked `[forced]`; the branch
   stays reported as one-sided. Only one flag is changed, so treat what it reaches as
-  "the code that is there", never as "what the game does".
+  "the code that is there", never as "what the game does". Try the states saved in
+  play first and the menu's last: a fork from a menu waits for a key and reaches
+  nothing, but code only the menu runs, such as its tune, is reached from nowhere
+  else.
 - Name enemies and objects from what is on the `screen`, and say that is how they
   were named.
 
@@ -196,6 +199,17 @@ Door the starts came from the object records, constants in code that ran, and
 words in data the game read, which is where its animation scripts are. Words in
 code that never ran are noise.
 
+**Decode the scripts that choose the pictures, too.** Each frame a script names
+is the start of a picture, so the scripts say where all the picture data is. On
+Trap Door six of the starts were outside the area decoded first, and three areas
+labelled "scripts" or "movement data" were creatures' pictures. Read every
+command's handler for how far it moves the script on and whether it comes back.
+One of Trap Door's skips two or four words, and five start a script of their own
+and never return. Read the handlers that never ran from their bytes, not from a
+note: one taken from a note as never coming back does come back. Then walk every
+word in each area that no decoded program covers. That is how scripts nothing
+starts turn up, and how a wrong reading of a command shows itself.
+
 `code_map` lists the widest sixty runs of each kind and counts the rest. Before
 that count was added, it dropped them without a word, and a decoder checked
 against it looked wrong for bytes the map had simply left out. Ask for a range.
@@ -225,6 +239,12 @@ Then write, using `set_comment` (a label, a comment, or both):
 - **Name handlers from their code, not from what you think the game has.** Knight
   Lore's "sun and moon" handler was the floating charm the wizard asks for, which
   only reading what it compares and copies showed.
+- **Let the game's own text say what a byte of flags means.** When a reply is
+  chosen bit by bit, each message is that bit's definition: Trap Door prints a
+  complaint for each bit clear (NO EGGS !, NOT COOKED !). Hints that test a
+  record name the creature in it, which corrected a name read off the code (the
+  "worm" laid eggs; the worms were somewhere else). Check the names against the
+  drawings.
 - **Read your own disassembly dump with care around data.** A dump disassembled
   straight through runs data into the next instruction, so a label put where the
   dump showed an instruction can be a byte inside one. The export decodes from what
@@ -247,7 +267,9 @@ Things that cost time on Jetpac:
 
 The notes file (`<tape>.zxrs.txt` beside the tape) holds all of it as plain text,
 so keep a copy of what you set in a file of your own too, and replay it after a
-restart. A replay script that loads, plays, pokes, forces and re-applies the notes
+restart. Taking a label out of your own file does not take it out of the notes:
+clear it with `set_comment` and an empty label. If you don't, it stays where it
+was, and inside a data claim it comes out as an EQU. A replay script that loads, plays, pokes, forces and re-applies the notes
 makes the final export reproducible.
 
 ## 6. Export and prove it
