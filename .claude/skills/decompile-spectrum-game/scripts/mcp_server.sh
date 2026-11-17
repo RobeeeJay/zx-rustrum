@@ -11,6 +11,12 @@ dir="${2:-${TMPDIR:-/tmp}/zxrs-mcp}"
 case "$1" in
 start)
     mkdir -p "$dir"
+    # Two servers on one fifo take turns at the requests, so each answers
+    # about half of them from a machine the caller is not driving.
+    if [ -f "$dir/server.pid" ] && kill -0 "$(cat "$dir/server.pid")" 2>/dev/null; then
+        echo "a server is already running (pid $(cat "$dir/server.pid")): stop it first" >&2
+        exit 1
+    fi
     [ -p "$dir/in.fifo" ] || mkfifo "$dir/in.fifo"
     : > "$dir/out.log"
     rm -f "$dir/id"
@@ -22,7 +28,10 @@ start)
     echo "started; state in $dir"
     ;;
 stop)
+    # The server would go when the holder's end of the fifo closed, but only
+    # once it next read; killing it as well means stop has stopped it.
     kill "$(cat "$dir/holder.pid")" 2>/dev/null || true
+    kill "$(cat "$dir/server.pid")" 2>/dev/null || true
     echo stopped
     ;;
 *)

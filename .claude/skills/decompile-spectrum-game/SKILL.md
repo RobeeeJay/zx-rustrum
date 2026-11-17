@@ -15,7 +15,9 @@ code once it has run**, so most of the work is getting the machine to run the
 parts nobody has played yet, and keeping what was measured apart from what was
 guessed. The steps below are in the order that worked on Jetpac
 ([references/jetpac.md](references/jetpac.md) has that game's results, as a
-worked example and a check on what "done" looks like).
+worked example and a check on what "done" looks like;
+[references/trap-door.md](references/trap-door.md) is one whose graphics are a
+small language the game interprets, decoded and checked against what was read).
 
 ## Driving the server
 
@@ -33,6 +35,14 @@ through a level makes thousands of calls, and a process each is slow. Restart
 the server after rebuilding it; its states go with it, so save anything you need
 to a `.sna` with `save_state {"path": ...}` first. `tools/list` (with `--raw`)
 says what every tool takes; `docs/mcp.md` says what each one is for.
+
+Keep to one server. Two reading the same fifo take turns at the requests, so
+each answers half of them from a machine nobody is driving, and the replies look
+merely odd. `mcp_server.sh start` now refuses while one is running and `stop`
+kills it, but a server started some other way is not in its pid file: check
+`pgrep -fl release/mcp` when replies stop making sense. Never set
+`ZXRS_MCP_DIR` to nothing: `mcp_call.py` then works in the current directory and
+leaves a file called `id` in the repository.
 
 Rebuild with `cargo build --release` and relaunch the app after any change to the
 emulator itself, as the project's CLAUDE.md asks.
@@ -133,6 +143,12 @@ side of it: there should be none.
 
 Expect a residue that never runs. Say what it is and why it was not reached.
 
+Some of what `coverage` calls reachable is not code at all. A routine that prints
+the text placed after its own `CALL` (`POP` the return address, read to a
+terminator, `PUSH` and `RET`) leaves its strings looking like the code that
+follows the call. On Trap Door that was 250 of the 1,152 "reachable" bytes. Type
+them as text and say so, rather than chasing them with `force_branch`.
+
 ## 4. Say what the data is
 
 `set_data` turns bytes into what they are, for both the listing and the export:
@@ -163,7 +179,26 @@ keep a mask byte before each byte of picture: pass `masked: true`.
 
 `set_data` warns when a claim covers code that has run. Take the warning: a table
 typed eight words too long swallowed the start of a routine and nothing else
-noticed, because the bytes still came out right.
+noticed, because the bytes still came out right. It cannot warn about code that
+never ran. On Trap Door, three `LD HL,text : JP print_text` stubs sat between the
+strings, and a text claim over the whole region swallowed them; `roundtrip.py`
+showed it only as labels turned into EQUs. Type text string by string, from the
+bytes, cut wherever a label is, and keep the bytes between strings (selectors,
+counters, headers) as bytes, so only what is printed reads as text.
+
+**Formats a program interprets.** Picture programs, animation scripts and tunes
+are byte codes read by an interpreter in the game. Read the interpreter for each
+command's operands, then write a decoder that walks every program from where the
+game starts it. Check the decoder against `code_map` with `from` and `to`: the
+bytes it covers should be bytes the machine read, and the bytes the machine read
+should be covered. Each gap is a start the decoder has not found yet. On Trap
+Door the starts came from the object records, constants in code that ran, and
+words in data the game read, which is where its animation scripts are. Words in
+code that never ran are noise.
+
+`code_map` lists the widest sixty runs of each kind and counts the rest. Before
+that count was added, it dropped them without a word, and a decoder checked
+against it looked wrong for bytes the map had simply left out. Ask for a range.
 
 ## 5. Explain it
 
@@ -224,6 +259,15 @@ makes the final export reproducible.
    Any difference is something the game changed while sitting at its menu; put the
    tape's bytes back with `write_memory` and say so in the notes, so the export is
    the game as it came off the tape.
+
+   A block may not be on the tape as it is in memory: encrypted, compressed or
+   decoded by a loader in another block. Trap Door's block 5 is not found in memory
+   anywhere, because the loader in block 3 decodes it. Then
+   save the machine the moment loading ends, and compare the export state with that
+   instead. Look for code the game moves once it starts, too. Trap Door copies its
+   sound code from where the tape put it (`$6F04`, under a buffer) to `$FC6C`, and
+   the copy left behind still holds the tune's variables as loaded, before the menu
+   tune changed them.
 3. `save_state {"name":"export","path":".../export.sna"}`, then `export_asm` with
    `from` and `to` covering only the game, so the file is the game and not 48K of
    whatever RAM held.
