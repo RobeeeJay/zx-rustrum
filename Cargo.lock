@@ -8471,7 +8471,7 @@ dependencies = [
 
 [[package]]
 name = "zx-rustrum"
-version = "1.5.0"
+version = "1.5.1"
 dependencies = [
  "burn",
  "burn-ndarray",
